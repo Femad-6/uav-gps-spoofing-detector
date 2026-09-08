@@ -70,7 +70,7 @@ def _feature_columns(X: pd.DataFrame, prefix: str | None) -> List[str]:
     """取特征列：剔除元数据列，可选按前缀过滤（'f_'=L1、'c_'=L2、None=全部）。"""
     feats = [c for c in X.columns if c not in META_COLUMNS]
     if prefix is not None:
-        feats = [c for c in feats if c.startswith(prefix)]
+        feats = [c for c in feats if isinstance(c, str) and c.startswith(prefix)]
     return feats
 
 

@@ -1,7 +1,7 @@
 """规范化数据加载器。
 
-将任意飞行日志 CSV（PX4/Gazebo 风格的列名、可能含 ';' 分隔的向量字符串）
-转换为统一的规范化 DataFrame（列见 NORMALIZED_COLUMNS，20Hz 均匀网格）。
+将任意飞行日志 CSV（PX4/Gazebo 风格列名；可能为 'a;b;c' 向量字符串或
+x/y/z 拆分列）转换为统一的规范化 DataFrame（20Hz 均匀网格）。
 
 规范化列名一览：
     time_s, lat, lon, alt_gps, alt_baro,
@@ -9,8 +9,8 @@
     ax, ay, az,                   # 加速度 m/s^2
     gx, gy, gz,                   # 角速度 rad/s
     roll, pitch, yaw,             # rad
-    mx, my, mz,
-    attack                       # 0/1 诱骗使能标志（无该列则为空列）
+    mx, my, mz,                   # 磁场（原单位）
+    attack                        # 0/1 诱骗使能标志
 """
 from __future__ import annotations
 
@@ -34,67 +34,110 @@ NORMALIZED_COLUMNS = [
     "attack",
 ]
 
-# 列名模式 -> 规范化名。按列表顺序**先匹配先采纳**。
-# 注意：alt_baro 相关模式必须先于 alt_gps。
-PATTERNS: List[Tuple[str, str]] = [
-    (r"pressure\s*alt|baro|barometric", "alt_baro"),
-    (r"timestamp|_usec|_us$|^time$|time_s|^time\b", "time_s"),
-    (r"latitude|^lat$|^lat\b", "lat"),
-    (r"longitude|^lon$|^lon\b", "lon"),
-    (r"altitude|^alt$|^alt\b", "alt_gps"),
-    (r"velocity", "velocity"),          # 向量或标量，暂存后展开
-    (r"vx|vel[_-]?e|vel_e", "vel_e"),
-    (r"vy|vel[_-]?n|vel_n", "vel_n"),
-    (r"vz|vel[_-]?u|vel_u", "vel_u"),
-    (r"linear\s*acc|accel|^ax$|^ay$|^az$", "accels"),  # 向量或分量
-    (r"angular\s*vel|gyro", "gyros"),
-    (r"orientation|quat", "orientation"),
-    (r"mag(netic)?|^mx$|^my$|^mz$", "mags"),
-    (r"attack|spoof", "attack"),
-    (r"(^|[_-])(roll|pitch|yaw)", "rpy"),
+
+def _norm_name(col: str) -> str:
+    """小写、下划线/连字符转空格，便于正则匹配。"""
+    return unicodedata.normalize("NFKD", col).lower().replace("_", " ").replace("-", " ")
+
+
+# 向量分量正则: 规范化名 -> (canonical, 轴)。按顺序先匹配先采纳。
+COMP_PATTERNS: List[Tuple[re.Pattern, str, str]] = [
+    (re.compile(r"velocity[ _]east|(^|_)vx$"), "vel_e", ""),
+    (re.compile(r"velocity[ _]north|(^|_)vy$"), "vel_n", ""),
+    (re.compile(r"velocity[ _]up|(^|_)vz$"), "vel_u", ""),
+    (re.compile(r"linear acceleration (x|y|z)$|accel?[ _]?(x|y|z)$"), "acc", "axis"),
+    (re.compile(r"angular velocity (x|y|z)$|gyro[ _]?(x|y|z)$"), "gyro", "axis"),
+    (re.compile(r"magnetic field (x|y|z)$|mag(netic)?[ _]?(x|y|z)$"), "mag", "axis"),
+    (re.compile(r"orientation[ _](x|y|z|w)$|quat[ _](x|y|z|w)$"), "quat", "axis"),
 ]
 
 
-def _norm_name(col: str) -> str:
-    """小写化并把下划线转空格，便于模式匹配。"""
-    return (
-        unicodedata.normalize("NFKD", col)
-        .lower()
-        .replace("_", " ")
-        .replace("-", " ")
-    )
-
-
 def infer_schema(columns: Sequence[str]) -> Dict[str, Optional[str]]:
-    """由列名列表推断 规范化名 -> 原始列名。未映射的规范化名值为 None。"""
+    """由列名推断 规范化名 -> 原始列名；未映射为 None。"""
     schema: Dict[str, Optional[str]] = {c: None for c in NORMALIZED_COLUMNS}
-    used: set = set()
+    # 额外追踪: 向量字符串列与四元数拆分列
+    extras: Dict[str, Optional[str]] = {"_vel": None, "_acc": None, "_gyro": None,
+                                        "_mag": None, "_quat": None}
+    quat_axes: Dict[str, Optional[str]] = {f"_q{a}": None for a in "xyzw"}
     for col in columns:
-        norm = _norm_name(str(col))
-        for pat, target in PATTERNS:
-            if re.search(pat, norm):
-                if target in ("velocity", "accels", "gyros", "orientation", "mags", "rpy"):
-                    # 暂存到临时键，由 resolve 阶段拆解
-                    schema.setdefault(f"_{target}", col)
+        n = _norm_name(str(col))
+        if not n:
+            continue
+        matched = False
+        for pat, canon, group in COMP_PATTERNS:
+            m = pat.search(n)
+            if m:
+                if group == "axis":
+                    ax = m.group(1)
+                    if canon == "acc":
+                        if schema[f"a{ax}"] is None:
+                            schema[f"a{ax}"] = col
+                    elif canon == "gyro":
+                        if schema[f"g{ax}"] is None:
+                            schema[f"g{ax}"] = col
+                    elif canon == "mag":
+                        if schema[f"m{ax}"] is None:
+                            schema[f"m{ax}"] = col
+                    elif canon == "quat":
+                        if quat_axes[f"_q{ax}"] is None:
+                            quat_axes[f"_q{ax}"] = col
                 else:
-                    if schema.get(target) is None:
-                        schema[target] = col
-                used.add(col)
+                    if schema[canon] is None:
+                        schema[canon] = col
+                matched = True
                 break
-    # 向量类列名单独记录（含分量列的情况在解析列时处理）
-    for target in ("velocity", "accels", "gyros", "orientation", "mags", "rpy"):
-        col = schema.get(f"_{target}") if f"_{target}" in schema else None
-        # 上面 setdefault 已写入；这里仅清理临时键与目标非必须
-    for k in list(schema.keys()):
-        if k.startswith("_"):
-            if k[1:] in ("velocity", "accels", "gyros", "orientation", "mags") and schema.get(k[1:]) is None:
-                tmp = schema.pop(k)
-                schema[f"_{k[1:]}"] = tmp if k.startswith("_") else None
+        if matched:
+            continue
+        if re.search(r"pressure alt|baro", n):
+            if schema["alt_baro"] is None:
+                schema["alt_baro"] = col
+        elif re.search(r"^time( usec| us| s)?$|^timestamp$", n):
+            if schema["time_s"] is None:
+                schema["time_s"] = col
+        elif re.search(r"latitude", n):
+            if schema["lat"] is None:
+                schema["lat"] = col
+        elif re.search(r"longitude", n):
+            if schema["lon"] is None:
+                schema["lon"] = col
+        elif re.search(r"altitude$|(^|_)alt$", n):
+            if schema["alt_gps"] is None:
+                schema["alt_gps"] = col
+        elif re.search(r"(^|_)velocity$", n):        # 向量字符串或标量（含分量时忽略）
+            if extras["_vel"] is None:
+                extras["_vel"] = col
+        elif re.search(r"(^|_)linear acceleration$", n):
+            if extras["_acc"] is None:
+                extras["_acc"] = col
+        elif re.search(r"(^|_)angular velocity$|(^|_)gyro$", n):
+            if extras["_gyro"] is None:
+                extras["_gyro"] = col
+        elif re.search(r"(^|_)magnetic field$|(^|_)mag$", n):
+            if extras["_mag"] is None:
+                extras["_mag"] = col
+        elif re.search(r"(^|_)orientation$|(^|_)quat$", n):
+            if extras["_quat"] is None:
+                extras["_quat"] = col
+        elif re.search(r"(^|_)roll$|(^|_)pitch$|(^|_)yaw$", n):
+            axis = re.search(r"(roll|pitch|yaw)", n).group(1)
+            if schema[axis] is None:
+                schema[axis] = col
+        elif re.search(r"attack|spoof", n):
+            if schema["attack"] is None:
+                schema["attack"] = col
+    for k, v in extras.items():
+        schema[k] = v
+    for k, v in quat_axes.items():
+        schema[k] = v
     return schema
 
 
-def _to_vec(series: pd.Series) -> List[np.ndarray]:
-    """把列中的 '1;2;3' 或纯数值转换为 N x 3 矩阵；失败返回空列表。"""
+def suffixed_usec(col: str) -> bool:
+    return "_usec" in col or "_us" in col
+
+
+def _to_vec(series: pd.Series) -> List[List[float]]:
+    """'a;b;c' 向量字符串或标量 → 元素为数值列表的列表。"""
     out = []
     for v in series.astype(object):
         if isinstance(v, str) and ";" in v:
@@ -108,99 +151,111 @@ def _to_vec(series: pd.Series) -> List[np.ndarray]:
     return out
 
 
-def _vec_to_columns(mat: List[List[float]], names: List[str], df: pd.DataFrame) -> Dict[str, np.ndarray]:
-    """将向量列表拆成命名列；len(部分)!=3 时返回全 NaN。"""
+def _vec_to_columns(mat: List[List[float]], names: List[str]) -> Dict[str, np.ndarray]:
     vals = {n: np.full(len(mat), np.nan, dtype=float) for n in names}
     for i, parts in enumerate(mat):
-        if len(parts) == 3:
+        if len(parts) == len(names):
             for n, p in zip(names, parts):
                 vals[n][i] = p
     return vals
 
 
-def _quat_to_rpy(mat: List[List[float]]) -> Dict[str, np.ndarray]:
-    """四元数 (w;x;y;z) -> roll/pitch/yaw (rad)。若为 3 元则视为欧拉角(rad)。"""
-    if mat and len(mat[0]) == 3:
-        return _vec_to_columns(mat, ["roll", "pitch", "yaw"], None)  # 3 元素直接当欧拉角
-    n = len(mat)
+def _quat_to_rpy(comp: Dict[str, Optional[str]], raw: pd.DataFrame) -> Dict[str, np.ndarray]:
+    """四元数 → roll/pitch/yaw(rad)。优先级: x/y/z/w 拆分列 > 向量字符串(按 x;y;z;w)。"""
+    n = len(raw)
     res = {k: np.full(n, np.nan) for k in ("roll", "pitch", "yaw")}
-    if not mat or len(mat[0]) != 4:
+    if all(comp.get(f"_q{a}") for a in "xyzw"):
+        qx = pd.to_numeric(raw[comp["_qx"]], errors="coerce").to_numpy(dtype=float)
+        qy = pd.to_numeric(raw[comp["_qy"]], errors="coerce").to_numpy(dtype=float)
+        qz = pd.to_numeric(raw[comp["_qz"]], errors="coerce").to_numpy(dtype=float)
+        qw = pd.to_numeric(raw[comp["_qw"]], errors="coerce").to_numpy(dtype=float)
+    elif comp.get("_quat"):
+        mat = _to_vec(raw[comp["_quat"]])
+        if mat and len(mat[0]) == 4:
+            arr = np.asarray(mat, dtype=float)
+            qx, qy, qz, qw = arr[:, 0], arr[:, 1], arr[:, 2], arr[:, 3]
+        elif mat and len(mat[0]) == 3:   # 3 元视为欧拉角 rad
+            return _vec_to_columns(mat, ["roll", "pitch", "yaw"])
+        else:
+            return res
+    else:
         return res
-    for i, (w, x, y, z) in enumerate(mat):
-        res["roll"][i] = np.arctan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y))
-        res["pitch"][i] = np.arcsin(min(1.0, max(-1.0, 2 * (w * y - z * x))))
-        res["yaw"][i] = np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+    ok = np.isfinite(qx) & np.isfinite(qy) & np.isfinite(qz) & np.isfinite(qw)
+    with np.errstate(invalid="ignore"):
+        roll = np.arctan2(2 * (qw * qx + qy * qz), 1 - 2 * (qx * qx + qy * qy))
+        pitch = np.arcsin(np.clip(2 * (qw * qy - qz * qx), -1, 1))
+        yaw = np.arctan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz))
+    res["roll"][ok] = roll[ok]
+    res["pitch"][ok] = pitch[ok]
+    res["yaw"][ok] = yaw[ok]
     return res
 
 
 def load_flight(path: str | Path, resample_hz: float = NOMINAL_HZ) -> pd.DataFrame:
-    """读取单个 CSV 并返回规范化 DataFrame（20Hz 均匀网格）。
+    """读取单个 CSV → 规范化 DataFrame（20Hz 均匀网格）。
 
-    - 时间列 '_usec' 结尾的按微秒转秒；
-    - 向量字符串 'a;b;c' 拆成 3 列（Velocity/Linear Acceleration/Angular
-      Velocity/Magnetic Field/四元数 Orientation）；
-    - 缺失的规范化列以全 NaN 空列补齐。
+    - '_usec' 时间列按微秒转秒（并排序）；
+    - 支持拆分列 / ';' 向量字符串两种形态；
+    - 缺失列以 NaN 空列补齐。
     """
     raw = pd.read_csv(path)
     raw = raw.rename(columns=lambda c: str(c).strip())
     schema = infer_schema(raw.columns)
+    n = len(raw)
 
     df = pd.DataFrame()
-    # 1) 时间
     tcol = schema["time_s"]
-    t = pd.to_numeric(raw[tcol], errors="coerce") if tcol else pd.Series(np.arange(len(raw)) * (1.0 / resample_hz))
-    if tcol and suffixed_usec(tcol):
-        t = t / 1e6
-    order = t.argsort()
-    raw = raw.iloc[order].reset_index(drop=True)
-    t = pd.to_numeric(raw[schema["time_s"]], errors="coerce") if schema["time_s"] else t.iloc[order]
+    if tcol:
+        t = pd.to_numeric(raw[tcol], errors="coerce").to_numpy(dtype=float)
+        if suffixed_usec(tcol):
+            t = t / 1e6
+        order = np.argsort(t)
+        raw = raw.iloc[order].reset_index(drop=True)
+        t = t[order]
+    else:
+        t = np.arange(n) * (1.0 / resample_hz)
 
-    # 2) 标量列
-    scalar_map = {"lat": None, "lon": None, "alt_gps": None, "alt_baro": None,
-                  "vel_e": None, "vel_n": None, "vel_u": None, "ax": None, "ay": None, "az": None,
-                  "gx": None, "gy": None, "gz": None, "roll": None, "pitch": None, "yaw": None,
-                  "mx": None, "my": None, "mz": None, "attack": None}
-    for canon in scalar_map:
+    # 标量列
+    for canon in ("lat", "lon", "alt_gps", "alt_baro"):
         col = schema.get(canon)
         if col:
-            df[canon] = pd.to_numeric(raw[col].astype(str).str.extract(r"([+-]?\d*\.?\d+(?:[eE][+-]?\d+)?)")[0]
-                                      if raw[col].dtype == object and raw[col].astype(str).str.contains(";").any()
-                                      else raw[col], errors="coerce")
-    # 向量列展开
-    vec_cols = {}
-    for canon, names in [("velocity", ["vel_e", "vel_n", "vel_u"]),
-                         ("accels", ["ax", "ay", "az"]),
-                         ("gyros", ["gx", "gy", "gz"]),
-                         ("mags", ["mx", "my", "mz"])]:
-        col = schema.get(f"_{canon}")
-        if col is None:
-            col = schema.get(canon)
-        if col:
-            vec_cols.update(_vec_to_columns(_to_vec(raw[col]), names, raw))
-    if schema.get("_orientation") or schema.get("orientation"):
-        col = schema.get("_orientation") or schema.get("orientation")
-        vec_cols.update(_quat_to_rpy(_to_vec(raw[col])))
-    for k, v in vec_cols.items():
-        df[k] = v
-    # 若分量列直接存在（如 vx/vy/vz），覆盖
-    for canon in ("vel_e", "vel_n", "vel_u", "ax", "ay", "az", "gx", "gy", "gz", "mx", "my", "mz", "roll", "pitch", "yaw"):
-        col = schema.get(canon)
-        if col and canon not in df:
             df[canon] = pd.to_numeric(raw[col], errors="coerce")
+    # 速度/加速度/角速度/磁场：分量列优先，缺省时向量字符串兜底
+    for canon, extra in (("vel", "_vel"), ("acc", "_acc"),
+                         ("gyro", "_gyro"), ("mag", "_mag")):
+        names = {"vel": ["vel_e", "vel_n", "vel_u"], "acc": ["ax", "ay", "az"],
+                 "gyro": ["gx", "gy", "gz"], "mag": ["mx", "my", "mz"]}[canon]
+        cols = [schema.get(x) for x in names]
+        if cols and all(cols):
+            for x, c in zip(names, cols):
+                df[x] = pd.to_numeric(raw[c], errors="coerce")
+        elif schema.get(extra):
+            vec = _vec_to_columns(_to_vec(raw[schema[extra]]), names)
+            for x in names:
+                df[x] = vec[x]
+    # 姿态：拆分列/向量字符串，独立的 roll/pitch/yaw 列最后覆盖
+    rpy = _quat_to_rpy(schema, raw)
+    for k in ("roll", "pitch", "yaw"):
+        df[k] = rpy[k]
+    for k in ("roll", "pitch", "yaw"):
+        col = schema.get(k)
+        if col:
+            df[k] = pd.to_numeric(raw[col], errors="coerce")
+    # 攻击标签
+    if schema.get("attack"):
+        a = pd.to_numeric(raw[schema["attack"]].astype(str)
+                          .str.replace("True", "1").str.replace("False", "0"), errors="coerce")
+        df["attack"] = a.fillna(0.0)
+    else:
+        df["attack"] = 0.0
 
-    # 3) 归一化残差：attack 若为 'Attack: True/False' 式字符串先转换
-    if schema.get("attack") and schema["attack"] not in df:
-        a = raw[schema["attack"]]
-        df["attack"] = pd.to_numeric(a.astype(str).str.replace("True", "1").str.replace("False", "0"), errors="coerce").fillna(0)
-
-    # 4) 统一时间与重采样
-    df["time_s"] = t.to_numpy(dtype=float)
-    df = df.dropna(subset=["time_s"])
-    df = df.sort_values("time_s").reset_index(drop=True)
-    if df["time_s"].nunique() < 3:
+    # 统一重采样
+    df["time_s"] = t
+    df = df.dropna(subset=["time_s"]).sort_values("time_s").reset_index(drop=True)
+    if len(df) < 3 or df["time_s"].nunique() < 3:
         return df.reindex(columns=NORMALIZED_COLUMNS)
     grid = np.arange(df["time_s"].iloc[0], df["time_s"].iloc[-1], 1.0 / resample_hz)
-    num_cols = [c for c in df.columns if c in NORMALIZED_COLUMNS and c != "attack"]
+    num_cols = [c for c in NORMALIZED_COLUMNS if c != "attack"]
     resampled = pd.DataFrame({"time_s": grid})
     for c in num_cols:
         y = df[c].to_numpy(dtype=float)
@@ -209,32 +264,17 @@ def load_flight(path: str | Path, resample_hz: float = NOMINAL_HZ) -> pd.DataFra
         else:
             ok = ~np.isnan(y)
             resampled[c] = np.interp(grid, df["time_s"][ok], y[ok])
-    if "attack" in df.columns:
-        y = df["attack"].to_numpy(dtype=float)
-        idx = np.clip(np.searchsorted(df["time_s"], grid) - 1, 0, len(y) - 1)
-        resampled["attack"] = y[idx] if len(y) > 0 else 0.0
-    else:
-        resampled["attack"] = 0.0
+    y = df["attack"].to_numpy(dtype=float)
+    idx = np.clip(np.searchsorted(df["time_s"], grid) - 1, 0, len(y) - 1)
+    resampled["attack"] = y[idx] if len(y) else 0.0
     return resampled.reindex(columns=NORMALIZED_COLUMNS)
 
 
-def suffixed_usec(col: str) -> bool:
-    return "_usec" in col or "_us" in col
-
-
-def load_all(data_dir: str | Path, only_merged: bool = True) -> Dict[str, pd.DataFrame]:
-    """加载目录下全部日志。默认仅取 merged 目录（时间同步版）。
-
-    flight_id 由相对路径生成（如 'Merged/Curved/Attacked/log_...'）。
-    """
+def load_all(data_dir: str | Path) -> Dict[str, pd.DataFrame]:
+    """加载 merged 日志（log_*.csv）目录下全部航班。flight_id 由相对路径生成。"""
     data_dir = Path(data_dir)
     flights: Dict[str, pd.DataFrame] = {}
-    csvs = sorted(p for p in data_dir.rglob("*.csv") if "raw" not in str(p).lower() or not only_merged)
-    if only_merged:
-        csvs = [p for p in data_dir.rglob("*.csv") if "merged" in str(p).lower() or (not only_merged)]
-    # 若没有名为 merged 的目录，退化为所有 log_*.csv
-    if not csvs:
-        csvs = sorted(p for p in data_dir.rglob("log_*.csv"))
+    csvs = sorted(p for p in data_dir.rglob("log_*.csv"))
     for p in csvs:
         try:
             df = load_flight(p)

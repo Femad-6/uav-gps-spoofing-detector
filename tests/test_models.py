@@ -14,7 +14,7 @@ def test_threshold_detector_detects_divergent_window():
 
 def test_fit_m1_is_deterministic():
     rng = np.random.default_rng(0)
-    X = pd.DataFrame(rng.normal(size=(100, 8)))
+    X = pd.DataFrame(rng.normal(size=(100, 8)), columns=[f"f_{i}" for i in range(8)])
     y = pd.Series(rng.integers(0, 2, 100))
     m1 = fit_m1(X, y, seed=42)
     m2 = fit_m1(X, y, seed=42)

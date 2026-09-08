@@ -11,7 +11,6 @@ def test_evaluate_metrics_basic():
         "label": [1, 0, 0, 1],
         "flight_id": ["f1"] * 4,
         "window_start_s": [0.0, 1.0, 2.0, 3.0],
-        "split": ["train"] * 4,
     })
     m = evaluate_all({"m": preds})
     assert 0.5 < m["m"]["AUROC"] < 1.0

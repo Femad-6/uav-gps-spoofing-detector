@@ -9,6 +9,7 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # 允许 import src
 import joblib
 import numpy as np
 import pandas as pd
