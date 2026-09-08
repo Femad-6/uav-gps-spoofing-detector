@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 # ---- 全局常量（固定种子，保证可复现）----
@@ -14,8 +15,9 @@ NOMINAL_HZ = 20.0
 
 # ---- 路径 ----
 ROOT = Path(__file__).resolve().parents[1]
-DATA_DIR = ROOT / "data" / "raw"
-PROCESSED_DIR = ROOT / "data_processed"
+_DATA_OVERRIDE = os.environ.get("SPOOFING_DATA_DIR")  # run_all --tiny 使用
+DATA_DIR = Path(_DATA_OVERRIDE) if _DATA_OVERRIDE else ROOT / "data" / "raw"
+PROCESSED_DIR = (ROOT / "data_processed_tiny" if _DATA_OVERRIDE else ROOT / "data_processed")
 OUTPUT_DIR = ROOT / "outputs"
 MODEL_DIR = OUTPUT_DIR / "models"
 
