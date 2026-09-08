@@ -1,5 +1,133 @@
 # 无人机 GPS 诱骗检测与安全分析
 
-2026 推免短期综合任务。基于公开 UAV-GPS-Spoofing-Dataset，完成多源传感器一致性特征设计、M0-M4 方法对比与因果流式在线检测服务。
+2026 推免短期综合任务。基于公开 UAV-GPS-Spoofing-Dataset（PX4/Gazebo 仿真实机日志，
+250Hz，含正常与隐蔽 GPS 诱骗飞行），完成多源传感器一致性特征设计、M0–M4 方法对比、
+因果流式在线检测服务（CLI + FastAPI）。
 
-> 文档随任务推进补齐：运行环境、数据下载、一键命令、预期输出、AI 使用声明。
+## 项目结构
+
+```text
+├── src/                     # 核心代码
+│   ├── config.py            # 全局配置（随机种子 42、窗参数、路径）
+│   ├── data_loader.py       # 飞行日志 → 规范化 20Hz DataFrame（自动列名推断）
+│   ├── features.py          # L1 原始统计 + L2 物理一致性 + L3 滑窗特征
+│   ├── labels.py            # attack 区间标签 + 按航班划分 train/test
+│   ├── models.py            # M0 阈值规则、M1 随机森林（L1 特征）
+│   ├── models_m2.py         # M2 HistGradientBoosting（全特征）
+│   ├── models_m3.py         # M3 BiLSTM（原始时序，可 GPU）
+│   ├── models_m4.py         # M4 孤立森林（无监督，仅正常窗训练）
+│   ├── evaluate.py          # AUROC/AUPRC/F1/漏检/误报/检测延迟 + 图表
+│   ├── stream.py            # 因果流式检测器（在线语义）
+│   ├── cli.py               # 命令行检测
+│   └── server.py            # FastAPI 在线服务
+├── scripts/
+│   ├── download_data.py     # 数据下载（gdown + 断点续传重试）
+│   ├── make_dataset.py      # 原始日志 → 窗级特征 parquet + 划分
+│   ├── run_pipeline.py      # M0-M4 训练 + 评测 → metrics.csv + 图表
+│   └── run_all.py           # 一键全流程（--tiny 冒烟）
+├── tests/                   # pytest 测试（核心函数自检）
+├── data/raw/                # 原始数据（gitignore，脚本下载）
+├── data_processed/          # 窗级特征（gitignore，管线生成）
+├── outputs/                 # 实验结果：models/metrics.csv/figs/
+├── docs/                    # 设计文档、实施计划、数据集笔记、环境说明
+└── report/report.md         # 综合实验报告
+```
+
+## 运行环境
+
+- Windows/Linux + Python 3.10+（本项目在 Windows 11 / Python 3.12.1 验证）
+- GPU 可选（M3 加速；无 GPU 自动回退 CPU）
+- 依赖：`pip install -r requirements.txt`
+
+## 数据下载
+
+```bash
+python scripts/download_data.py
+```
+
+- 数据源为 Google Drive（2.58GB），脚本支持断点续传与最多 5 次自动重试；
+- 下载完成后解压到 `data/raw/PX4_Simulation_Data/`，合计 360 个 merged 航班日志
+  （3 种航线 × 正常/攻击 × 各 60 个，含逐样本 `attack_enabled` 标签）。
+
+## 一键运行
+
+```bash
+python scripts/run_all.py        # 全量：下载 → 特征 → 训练 M0-M4 → 评测 → 图表
+python scripts/run_all.py --tiny # 冒烟：仅前 3 个航班（~5 分钟）
+```
+
+预期输出（全量）：
+
+```text
+[1/3] 下载数据 ...   → [done] 数据就绪
+[2/3] 数据管线       → 窗数 N (train X / test Y)，正样本率 P
+[3/3] 训练 + 评测    → 每模型训练耗时 + 评测指标表 + [eval] 图表已保存
+[ok] m0 ... m4 训练并保存 -> outputs/models/*.joblib
+[done] 一键流程完成
+```
+
+产物清单：
+
+- `outputs/models/{m0,m1,m2,m3,m4}.joblib`
+- `outputs/metrics.csv`（各模型 AUROC/AUPRC/F1/漏检率/误报率/检测延迟）
+- `outputs/figs/`（roc_pr.png、feature_importance_*.png、timeline_*.png）
+- `data_processed/features_windowed.parquet`（可复现的全量特征）
+
+## 离线训练/评测（分步）
+
+```bash
+python scripts/make_dataset.py                 # 特征 + 标签 + 划分
+python scripts/run_pipeline.py                 # 训练 M0-M4 + 测评
+python scripts/run_pipeline.py --skip-m3       # 无 torch 时跳过 M3
+```
+
+## 在线检测
+
+**CLI（逐行因果流式）：**
+
+```bash
+python -m src.cli predict --input data/raw/PX4_Simulation_Data/Merged/Curved/Attacked/log_21_04_2023_07_21_03.csv \
+  --model outputs/models/m2.joblib
+```
+
+预期输出（JSON）：
+
+```json
+{
+  "flight": "log_21_04_2023_07_21_03.csv",
+  "spoofing": true,
+  "confidence": 0.99,
+  "alarm_intervals": [[2933.6, 3163.0]],
+  "n_windows": 450,
+  "runtime_s": 1.2
+}
+```
+
+**API 服务：**
+
+```bash
+uvicorn src.server:app --port 8000
+curl http://127.0.0.1:8000/healthz
+curl -X POST http://127.0.0.1:8000/predict_file -F file=@data/raw/.../log_*.csv
+```
+
+接口：`GET /healthz`；`POST /predict`（JSON，`rows` 为规范化行的列表，>=40 行）；
+`POST /predict_file`（multipart 上传 CSV）。模型未训练时 `/predict` 返回 503。
+
+## 测试
+
+```bash
+python -m pytest tests/            # 21 个用例，覆盖加载器/特征/标签/模型/评测/流式/API
+```
+
+所有实验固定随机种子（`src/config.py: SEED = 42`），按航班划分训练/测试（`configs/split.json`）。
+硬件环境记录见 `docs/environment.md`。
+
+## AI 工具与开源代码使用声明
+
+- 本项目在 Claude Code（Claude Agent SDK）辅助下完成：方案设计、代码编写、调试与报告草拟；
+  每一步均由作业者复核并本地验证运行，所有实验数字取自本地运行输出，无编造。
+- 使用的开源库：pandas、numpy、scikit-learn、matplotlib/seaborn、fastapi/uvicorn、pyarrow、
+  pytest、torch（完整列表见 `requirements.txt`）。
+- 数据集：UAV-GPS-Spoofing-Dataset（开源，见 docs/dataset-notes.md）；
+  未复制/修改任何第三方检测代码（检测方法为本项目自主设计）。
