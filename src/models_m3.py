@@ -34,8 +34,8 @@ class SpoofLSTM(nn.Module):
 
 
 def fit_m3(X_seq: np.ndarray, y_seq: np.ndarray, seq_len: int = 40,
-           seed: int = SEED, device: str | None = None, epochs: int = 15):
-    """X_seq: (n, seq_len, n_raw)；y_seq: (n,)。返回训练好的 SpoofLSTM。"""
+           seed: int = SEED, device: str | None = None, epochs: int = 20):
+    """X_seq: (n, seq_len, n_raw)；y_seq: (n,)。返回训练好的 SpoofLSTM（含标准化参数）。"""
     try:
         import torch
     except ImportError as e:
@@ -44,14 +44,20 @@ def fit_m3(X_seq: np.ndarray, y_seq: np.ndarray, seq_len: int = 40,
     np.random.seed(seed)
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
-    x = torch.as_tensor(X_seq, dtype=torch.float32, device=device)
+    # 逐特征标准化（特征量纲差异大，避免 sigmoid 饱和）
+    flat = X_seq.reshape(-1, X_seq.shape[-1])
+    mean = flat.mean(0).astype("float32")
+    std = flat.std(0).astype("float32") + 1e-6
+    x_np = ((X_seq - mean) / std).astype("float32")
+
+    x = torch.as_tensor(x_np, dtype=torch.float32, device=device)
     y = torch.as_tensor(y_seq, dtype=torch.float32, device=device)
     n = x.shape[0]
     idx = np.random.permutation(n)
     n_val = max(1, n // 5)
     val_idx, tr_idx = idx[:n_val], idx[n_val:]
 
-    model = SpoofLSTM(input_dim=x.shape[-1]).to(device)
+    model = SpoofLSTM(input_dim=x.shape[-1], hidden=64).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=1e-3)
     loss_fn = nn.BCELoss()
 
@@ -76,6 +82,8 @@ def fit_m3(X_seq: np.ndarray, y_seq: np.ndarray, seq_len: int = 40,
                 break
     if best_state:
         model.load_state_dict(best_state)
+    model.norm_mean_ = torch.as_tensor(mean)
+    model.norm_std_ = torch.as_tensor(std)
     return model
 
 
@@ -84,5 +92,8 @@ def predict_m3(model: SpoofLSTM, X_seq: np.ndarray, device: str | None = None) -
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     model.eval()
     with torch.no_grad():
+        mean = model.norm_mean_.to(device)
+        std = model.norm_std_.to(device)
         x = torch.as_tensor(X_seq, dtype=torch.float32, device=device)
+        x = (x - mean) / std
         return model(x).cpu().numpy()

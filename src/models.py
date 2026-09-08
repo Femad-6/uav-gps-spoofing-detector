@@ -74,9 +74,10 @@ def _feature_columns(X: pd.DataFrame, prefix: str | None) -> List[str]:
     return feats
 
 
-def fit_m1(X_tr: pd.DataFrame, y_tr, model_type: str = "random_forest", seed: int = SEED):
-    """M1: 仅 L1 特征（f_* 列）的监督分类器。模型对象带 feat_names_/imputer_ 属性。"""
-    feats = _feature_columns(X_tr, "f_")
+def fit_m1(X_tr: pd.DataFrame, y_tr, model_type: str = "random_forest",
+           seed: int = SEED, features: str | None = "f_"):
+    """监督分类器（默认仅 L1 的 f_* 列）。模型对象带 feat_names_/imputer_ 属性。"""
+    feats = _feature_columns(X_tr, features)
     if not feats:
         raise ValueError("未找到 f_* 特征列")
     if model_type == "random_forest":
@@ -87,6 +88,9 @@ def fit_m1(X_tr: pd.DataFrame, y_tr, model_type: str = "random_forest", seed: in
         raise ValueError(f"未知 model_type: {model_type}")
     imp = SimpleImputer(strategy="median")
     model.fit(imp.fit_transform(X_tr[feats]), np.asarray(y_tr))
+    # 在线流式推理是小批量调用：多线程线程池重建开销大于收益
+    if hasattr(model, "n_jobs"):
+        model.n_jobs = 1
     model.feat_names_ = feats
     model.imputer_ = imp
     return model
@@ -97,7 +101,7 @@ def predict_proba_all(model, X: pd.DataFrame) -> pd.DataFrame:
     Xd = X.copy()
     has_meta = {"flight_id", "window_start_s", "label"} <= set(Xd.columns)
     feats = getattr(model, "feat_names_", [c for c in Xd.columns if c not in META_COLUMNS])
-    Xm = Xd[feats].to_numpy(dtype=float)
+    Xm = Xd[feats]
     imp = getattr(model, "imputer_", None)
     if imp is not None:
         Xm = imp.transform(Xm)

@@ -24,12 +24,10 @@ from src.models_m2 import fit_m2
 from src.models_m3 import RAW_COLUMNS, fit_m3, predict_m3
 from src.models_m4 import fit_m4, score_m4
 
-ALL_MODELS = ["m0", "m1", "m2", "m3", "m4"]
+ALL_MODELS = ["m0", "m1", "m1b", "m2", "m3", "m4"]
 
 
 def _m0_preds(detector: ThresholdDetector, X: pd.DataFrame) -> pd.DataFrame:
-    probs = detector.score(X) if hasattr(detector, "score") else None
-    # detector.score 接受 Series；逐行计算
     probs = np.array([detector.score(r) for _, r in X.iterrows()])
     out = X[["flight_id", "window_start_s", "label", "split"]].copy()
     out["prob_1"] = probs
@@ -84,7 +82,7 @@ def main() -> int:
 
     if "m0" in wanted:
         t0 = time.time()
-        det = ThresholdDetector().fit(tr)
+        det = ThresholdDetector().fit(tr[tr["label"] == 0])   # 阈值从正常段统计得到
         _finalize("m0", _m0_preds(det, X), det)
         print(f"     训练耗时 {time.time() - t0:.1f}s")
 
@@ -92,6 +90,12 @@ def main() -> int:
         t0 = time.time()
         m1 = fit_m1(tr, tr["label"])
         _finalize("m1", predict_proba_all(m1, X), m1)
+        print(f"     训练耗时 {time.time() - t0:.1f}s")
+
+    if "m1b" in wanted:   # 消融: RF 全特征（检验 L2 特征对 RF 的影响）
+        t0 = time.time()
+        m1b = fit_m1(tr, tr["label"], features=None)
+        _finalize("m1b", predict_proba_all(m1b, X), m1b)
         print(f"     训练耗时 {time.time() - t0:.1f}s")
 
     if "m2" in wanted:
@@ -121,15 +125,29 @@ def main() -> int:
             lookup = {(fid, round(float(ws), 3)): int(lb)
                       for fid, lb, ws in zip(X["flight_id"], X["label"], X["window_start_s"])}
             y_seq = np.array([lookup.get(k, 0) for k in keys], dtype="float32")
+            # 分层下采样以控制 GPU 显存（正常/攻击各 ≤1 万窗）
+            if len(X_seq) > 20000:
+                rng = np.random.default_rng(SEED)
+                sel = np.concatenate([
+                    rng.choice(np.where(y_seq == 1)[0], min(10000, (y_seq == 1).sum()), replace=False),
+                    rng.choice(np.where(y_seq == 0)[0], min(10000, (y_seq == 0).sum()), replace=False),
+                ])
+                rng.shuffle(sel)
+                X_seq = X_seq[sel].astype("float32")
+                y_seq = y_seq[sel]
+                keys = [keys[i] for i in sel]
             m3 = fit_m3(X_seq, y_seq, seq_len=WINDOW_SIZE, seed=SEED)
             p3 = predict_m3(m3, X_seq)
             frame = pd.DataFrame({"flight_id": [k[0] for k in keys],
-                                  "window_start_s": [k[1] for k in keys],
+                                  "ws_r": [k[1] for k in keys],
                                   "label": y_seq.astype(int)})
-            frame = frame.merge(X[["flight_id", "window_start_s", "split"]], on=["flight_id", "window_start_s"], how="left")
+            Xr = X.copy()
+            Xr["ws_r"] = Xr["window_start_s"].round(3)
+            frame = frame.merge(Xr[["flight_id", "ws_r", "split"]], on=["flight_id", "ws_r"], how="left")
+            frame["window_start_s"] = frame["ws_r"]
             frame["prob_1"] = p3
             frame["pred"] = (p3 >= 0.5).astype(int)
-            _finalize("m3", frame, m3)
+            _finalize("m3", frame[["flight_id", "window_start_s", "label", "split", "prob_1", "pred"]], m3)
             print(f"     训练耗时 {time.time() - t0:.1f}s")
         except Exception as e:
             print(f"[warn] M3 跳过: {e}")

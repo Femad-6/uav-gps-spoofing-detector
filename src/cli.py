@@ -18,9 +18,11 @@ from src.stream import CausalStreamer, model_predictor
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="UAV GPS 诱骗流式检测 CLI")
-    ap.add_argument("--input", required=True, help="飞行日志 CSV")
-    ap.add_argument("--model", default="outputs/models/m2.joblib", help="模型文件 (joblib)")
-    ap.add_argument("--threshold", type=float, default=0.5, help="报警阈值")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("predict", help="对一段飞行数据做流式检测")
+    p.add_argument("--input", required=True, help="飞行日志 CSV")
+    p.add_argument("--model", default="outputs/models/m1.joblib", help="模型文件 (joblib)")
+    p.add_argument("--threshold", type=float, default=0.5, help="报警阈值")
     args = ap.parse_args()
 
     model_path = Path(args.model)

@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+from collections import deque
 from typing import Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -28,7 +29,8 @@ def model_predictor(model) -> Callable[[pd.Series], float]:
 class CausalStreamer:
     """因果流式检测器。
 
-    feed(row: dict 规范化行) -> 每 STRIDE 行返回窗口预测 dict 或 None。
+    feed(row: dict 规范化行) -> 满窗后每 STRIDE 行返回窗口预测 dict 或 None。
+    只保留最近 WINDOW_SIZE 行（定长环形缓冲），逐窗推理，不偷看未来。
     """
 
     def __init__(self, predictor: Callable[[pd.Series], float],
@@ -37,26 +39,28 @@ class CausalStreamer:
         self.predictor = predictor
         self.feature_extractor = feature_extractor
         self.threshold = threshold
-        self.buf: List[dict] = []
+        self.buf: deque = deque(maxlen=WINDOW_SIZE)
+        self.total = 0
         self.alerts: List[dict] = []
 
     def _features(self, buf_df: pd.DataFrame) -> pd.Series:
         if self.feature_extractor is not None:
             return self.feature_extractor(buf_df)
-        w = window_extract(buf_df.tail(WINDOW_SIZE))
+        w = window_extract(buf_df)
         if len(w) == 0:
             raise ValueError("buffer 样本不足")
         return w.iloc[0].drop(labels=["flight_id", "window_start_s", "label"])
 
     def feed(self, row: dict) -> Optional[dict]:
         self.buf.append(row)
-        if len(self.buf) <= WINDOW_SIZE or len(self.buf) % STRIDE != 0:
+        self.total += 1
+        if self.total < WINDOW_SIZE or (self.total - WINDOW_SIZE) % STRIDE != 0:
             return None
         buf_df = pd.DataFrame(self.buf)
         feats = self._features(buf_df)
         prob = float(self.predictor(feats))
         alert = prob >= self.threshold
-        ws = float(buf_df.loc[max(0, len(buf_df) - WINDOW_SIZE - STRIDE + 1), "time_s"])
+        ws = float(self.buf[0]["time_s"])
         out = {"window_start_s": ws, "prob": prob, "alert": alert}
         if alert:
             self.alerts.append(out)

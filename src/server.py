@@ -25,7 +25,7 @@ from src.config import ROOT
 from src.data_loader import load_flight
 from src.stream import CausalStreamer, model_predictor
 
-DEFAULT_MODEL_PATH = ROOT / "outputs" / "models" / "m2.joblib"
+DEFAULT_MODEL_PATH = ROOT / "outputs" / "models" / "m1.joblib"
 
 
 class PredictRequest(BaseModel):

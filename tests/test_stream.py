@@ -24,9 +24,9 @@ def test_causal_stream_consistent_probability():
 def test_causal_stream_emits_after_full_window():
     s = CausalStreamer(lambda row: 0.1)
     emitted = sum(1 for r in _rows(WINDOW_SIZE) if s.feed(r) is not None)
-    assert emitted == 0                      # 满窗前的行不产出
+    assert emitted == 1                     # 第 40 行到齐即产出第一窗
     emitted2 = sum(1 for r in _rows(2 * STRIDE) if s.feed(r) is not None)
-    assert emitted2 == 2                     # 满窗后每 STRIDE 行产出一次
+    assert emitted2 == 2                    # 其后每 STRIDE 行产出一次
 
 
 def test_alarm_intervals_merging():
@@ -36,4 +36,4 @@ def test_alarm_intervals_merging():
             pass
     iv = s.alarm_intervals()
     assert len(iv) == 1
-    assert iv[0][0] == 0.05 and iv[0][1] > iv[0][0]
+    assert iv[0][0] == 0.0 and iv[0][1] > iv[0][0]
