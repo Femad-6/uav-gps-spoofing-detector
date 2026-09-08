@@ -37,18 +37,28 @@ def clone_readme() -> None:
         print(f"[warn] git clone 失败（可忽略）: {e}")
 
 
+EXPECTED_MIN_BYTES = 2_000_000_000  # 完整包约 2.58GB，低于 2GB 视为未完成
+
+
 def download_zip() -> bool:
-    if ZIP_PATH.exists():
-        print(f"[skip] 已存在 {ZIP_PATH}，跳过下载")
+    if ZIP_PATH.exists() and ZIP_PATH.stat().st_size > EXPECTED_MIN_BYTES:
+        print(f"[skip] 已存在完整 {ZIP_PATH}，跳过下载")
         return True
     try:
         import gdown
     except ImportError:
         subprocess.run([sys.executable, "-m", "pip", "install", "-q", "gdown"], check=True)
         import gdown
-    print("[info] 从 Google Drive 下载数据（可能较大，请耐心等待）...")
-    gdown.download(DRIVE_URL, str(ZIP_PATH), quiet=False)
-    return ZIP_PATH.exists()
+    print("[info] 从 Google Drive 下载数据（约 2.6GB，断点续传，失败自动重试）...")
+    for attempt in range(1, 6):
+        try:
+            gdown.download(DRIVE_URL, str(ZIP_PATH), quiet=False, resume=True)
+        except Exception as e:
+            print(f"[warn] 第 {attempt} 次下载未完成: {e}")
+        if ZIP_PATH.exists() and ZIP_PATH.stat().st_size > EXPECTED_MIN_BYTES:
+            print(f"[ok] 下载完成: {ZIP_PATH.stat().st_size / 1e9:.2f} GB")
+            return True
+    return False
 
 
 def extract_zip() -> bool:
