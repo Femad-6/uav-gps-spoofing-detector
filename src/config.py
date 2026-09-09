@@ -15,11 +15,14 @@ NOMINAL_HZ = 20.0
 
 # ---- 路径 ----
 ROOT = Path(__file__).resolve().parents[1]
-_DATA_OVERRIDE = os.environ.get("SPOOFING_DATA_DIR")  # run_all --tiny 使用
+_DATA_OVERRIDE = os.environ.get("SPOOFING_DATA_DIR")  # 可选的替代数据目录
+TINY_MODE = os.environ.get("SPOOFING_TINY") == "1"
 DATA_DIR = Path(_DATA_OVERRIDE) if _DATA_OVERRIDE else ROOT / "data" / "raw"
-PROCESSED_DIR = (ROOT / "data_processed_tiny" if _DATA_OVERRIDE else ROOT / "data_processed")
-OUTPUT_DIR = ROOT / "outputs"
+PROCESSED_DIR = ROOT / ("data_processed_tiny" if TINY_MODE else "data_processed")
+OUTPUT_DIR = ROOT / ("outputs_tiny" if TINY_MODE else "outputs")
 MODEL_DIR = OUTPUT_DIR / "models"
+SPLIT_CONFIG = (PROCESSED_DIR / "split.json" if TINY_MODE
+                else ROOT / "configs" / "split.json")
 
 
 def require_env(verbose: bool = True) -> dict:

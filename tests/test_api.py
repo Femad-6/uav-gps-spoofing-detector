@@ -51,6 +51,15 @@ def test_predict_endpoint_schema(tmp_path):
     assert body["n_windows"] > 0
 
 
+def test_predict_endpoint_sorts_and_resamples_rows(tmp_path):
+    app = create_app(model_path=str(tmp_path / "m.joblib"))
+    _train_model(tmp_path / "m.joblib")
+    rows = list(reversed(_rows()))
+    r = TestClient(app).post("/predict", json={"flight_id": "test", "rows": rows})
+    assert r.status_code == 200
+    assert r.json()["n_windows"] > 0
+
+
 def test_predict_without_model_returns_503():
     app = create_app(model_path="definitely_missing.joblib")
     client = TestClient(app)

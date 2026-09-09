@@ -37,7 +37,7 @@
 
 - Windows/Linux + Python 3.10+（本项目在 Windows 11 / Python 3.12.1 验证）
 - GPU 可选（M3 加速；无 GPU 自动回退 CPU）
-- 依赖：`pip install -r requirements.txt`
+- 依赖：`pip install -r requirements.txt`（建议先创建独立虚拟环境，避免本机全局 pytest 插件干扰）
 
 ## 数据下载
 
@@ -53,7 +53,7 @@ python scripts/download_data.py
 
 ```bash
 python scripts/run_all.py        # 全量：下载 → 特征 → 训练 M0-M4 → 评测 → 图表
-python scripts/run_all.py --tiny # 冒烟：仅前 3 个航班（~5 分钟）
+python scripts/run_all.py --tiny # 冒烟：仅前 3 个航班（~5 分钟，产物写入 *_tiny 目录）
 ```
 
 预期输出（全量）：
@@ -72,6 +72,9 @@ python scripts/run_all.py --tiny # 冒烟：仅前 3 个航班（~5 分钟）
 - `outputs/metrics.csv`（各模型 AUROC/AUPRC/F1/漏检率/误报率/检测延迟）
 - `outputs/figs/`（roc_pr.png、feature_importance_*.png、timeline_*.png）
 - `data_processed/features_windowed.parquet`（可复现的全量特征）
+
+`--tiny` 不复制或改名原始日志，使用独立的航班划分、`data_processed_tiny/` 与
+`outputs_tiny/`，因此不会覆盖全量实验的划分、模型和结果。
 
 ## 离线训练/评测（分步）
 
@@ -111,13 +114,13 @@ curl http://127.0.0.1:8000/healthz
 curl -X POST http://127.0.0.1:8000/predict_file -F file=@data/raw/.../log_*.csv
 ```
 
-接口：`GET /healthz`；`POST /predict`（JSON，`rows` 为规范化行的列表，>=40 行）；
+接口：`GET /healthz`；`POST /predict`（JSON，`rows` 为规范化行的列表，服务会按 `time_s` 排序并重采样至 20Hz，>=40 行）；
 `POST /predict_file`（multipart 上传 CSV）。模型未训练时 `/predict` 返回 503。
 
 ## 测试
 
 ```bash
-python -m pytest tests/            # 21 个用例，覆盖加载器/特征/标签/模型/评测/流式/API
+python -m pytest tests/            # 23 个用例，覆盖加载器/特征/标签/模型/评测/流式/API
 ```
 
 所有实验固定随机种子（`src/config.py: SEED = 42`），按航班划分训练/测试（`configs/split.json`）。

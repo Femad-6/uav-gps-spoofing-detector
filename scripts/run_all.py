@@ -6,7 +6,6 @@
 """
 import argparse
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -25,29 +24,31 @@ def main() -> int:
 
     if not args.skip_download:
         print("[1/3] 下载数据 ...")
-        subprocess.run([sys.executable, "scripts/download_data.py"], cwd=ROOT)
+        r = subprocess.run([sys.executable, "scripts/download_data.py"], cwd=ROOT)
+        if r.returncode != 0:
+            return r.returncode
 
+    env = os.environ.copy()
     if args.tiny:
-        tiny = ROOT / "data" / "tiny"
-        tiny.mkdir(parents=True, exist_ok=True)
-        csvs = sorted((ROOT / "data" / "raw").rglob("*.csv"))[:3]
-        if not csvs:
+        csvs = sorted((ROOT / "data" / "raw").rglob("log_*.csv"))[:3]
+        if len(csvs) < 2:
             print("[error] --tiny 需要先下载数据（或手动放置 CSV 到 data/raw）")
             return 1
-        for c in csvs:
-            shutil.copy(c, tiny / c.name)
-        os.environ["SPOOFING_DATA_DIR"] = str(tiny)
-        print(f"      tiny 数据: {[c.name for c in csvs]}")
+        env["SPOOFING_TINY"] = "1"
+        print(f"      tiny 数据: {[c.name for c in csvs]}（独立划分、独立产物目录）")
 
     print("[2/3] 数据管线（特征/标签/划分）...")
-    r = subprocess.run([sys.executable, "scripts/make_dataset.py"], cwd=ROOT)
+    dataset_cmd = [sys.executable, "scripts/make_dataset.py"]
+    if args.tiny:
+        dataset_cmd += ["--max-flights", "3", "--fresh-split"]
+    r = subprocess.run(dataset_cmd, cwd=ROOT, env=env)
     if r.returncode != 0:
         return r.returncode
 
     if not args.skip_train:
         print("[3/3] 训练 + 评测 ...")
         models = "m0,m1,m2,m4" if args.tiny else "m0,m1,m2,m3,m4"
-        r = subprocess.run([sys.executable, "scripts/run_pipeline.py", "--models", models], cwd=ROOT)
+        r = subprocess.run([sys.executable, "scripts/run_pipeline.py", "--models", models], cwd=ROOT, env=env)
         if r.returncode != 0:
             return r.returncode
     print("[done] 一键流程完成")

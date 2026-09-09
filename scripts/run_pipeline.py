@@ -121,33 +121,41 @@ def main() -> int:
             seqs = _seq_inputs_update()
             keys = list(seqs.keys())
             X_seq = np.stack([seqs[k] for k in keys])
-            # 与窗级数据集按 (flight_id, window_start_s) 对齐标签
+            # 与窗级数据集按 (flight_id, window_start_s) 对齐标签和航班划分。
             lookup = {(fid, round(float(ws), 3)): int(lb)
                       for fid, lb, ws in zip(X["flight_id"], X["label"], X["window_start_s"])}
-            y_seq = np.array([lookup.get(k, 0) for k in keys], dtype="float32")
-            # 分层下采样以控制 GPU 显存（正常/攻击各 ≤1 万窗）
-            if len(X_seq) > 20000:
+            split_lookup = {(fid, round(float(ws), 3)): sp
+                            for fid, sp, ws in zip(X["flight_id"], X["split"], X["window_start_s"])}
+            keep = [i for i, key in enumerate(keys) if key in lookup and key in split_lookup]
+            X_seq = X_seq[keep]
+            keys = [keys[i] for i in keep]
+            y_seq = np.array([lookup[k] for k in keys], dtype="float32")
+            split_seq = np.array([split_lookup[k] for k in keys])
+            train_idx = np.where(split_seq == "train")[0]
+            test_idx = np.where(split_seq == "test")[0]
+            if not len(train_idx) or not len(test_idx):
+                raise ValueError("M3 需要同时存在训练与测试航班")
+            # 仅在训练集内分层下采样以控制 GPU 显存；测试集绝不参与拟合。
+            if len(train_idx) > 20000:
                 rng = np.random.default_rng(SEED)
-                sel = np.concatenate([
-                    rng.choice(np.where(y_seq == 1)[0], min(10000, (y_seq == 1).sum()), replace=False),
-                    rng.choice(np.where(y_seq == 0)[0], min(10000, (y_seq == 0).sum()), replace=False),
+                train_labels = y_seq[train_idx]
+                train_idx = np.concatenate([
+                    rng.choice(train_idx[train_labels == 1], min(10000, (train_labels == 1).sum()), replace=False),
+                    rng.choice(train_idx[train_labels == 0], min(10000, (train_labels == 0).sum()), replace=False),
                 ])
-                rng.shuffle(sel)
-                X_seq = X_seq[sel].astype("float32")
-                y_seq = y_seq[sel]
-                keys = [keys[i] for i in sel]
-            m3 = fit_m3(X_seq, y_seq, seq_len=WINDOW_SIZE, seed=SEED)
-            p3 = predict_m3(m3, X_seq)
-            frame = pd.DataFrame({"flight_id": [k[0] for k in keys],
-                                  "ws_r": [k[1] for k in keys],
-                                  "label": y_seq.astype(int)})
-            Xr = X.copy()
-            Xr["ws_r"] = Xr["window_start_s"].round(3)
-            frame = frame.merge(Xr[["flight_id", "ws_r", "split"]], on=["flight_id", "ws_r"], how="left")
-            frame["window_start_s"] = frame["ws_r"]
-            frame["prob_1"] = p3
+                rng.shuffle(train_idx)
+            m3 = fit_m3(X_seq[train_idx].astype("float32"), y_seq[train_idx],
+                        seq_len=WINDOW_SIZE, seed=SEED)
+            # 训练窗用于阈值选择，测试窗仅在模型冻结后预测。
+            eval_idx = np.concatenate([train_idx, test_idx])
+            p3 = predict_m3(m3, X_seq[eval_idx].astype("float32"))
+            frame = pd.DataFrame({"flight_id": [keys[i][0] for i in eval_idx],
+                                  "window_start_s": [keys[i][1] for i in eval_idx],
+                                  "label": y_seq[eval_idx].astype(int),
+                                  "split": split_seq[eval_idx],
+                                  "prob_1": p3})
             frame["pred"] = (p3 >= 0.5).astype(int)
-            _finalize("m3", frame[["flight_id", "window_start_s", "label", "split", "prob_1", "pred"]], m3)
+            _finalize("m3", frame, m3)
             print(f"     训练耗时 {time.time() - t0:.1f}s")
         except Exception as e:
             print(f"[warn] M3 跳过: {e}")

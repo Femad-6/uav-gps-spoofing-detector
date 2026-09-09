@@ -1,9 +1,13 @@
 # 原始数据与中间产物（通过 scripts 可复现）
 data/raw/
 data_processed/
+data_processed_tiny/
 outputs/models/
+outputs_tiny/
 __pycache__/
 *.pyc
 .venv/
 .ipynb_checkpoints/
 submit.tar.gz
+2026推免短期综合任务.md
+docs/demo-script.md

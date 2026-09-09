@@ -8,11 +8,8 @@ from typing import Dict, List, Tuple
 
 import pandas as pd
 
-from src.config import PROCESSED_DIR, ROOT, SEED
+from src.config import PROCESSED_DIR, SEED, SPLIT_CONFIG
 from src.features import attack_intervals
-
-SPLIT_CONFIG = ROOT / "configs" / "split.json"
-
 
 def build_labels(all_flights: Dict[str, pd.DataFrame]) -> Dict[str, List[Tuple[float, float]]]:
     """各航班 attack 列 → [(start_s, end_s), ...]；无攻击航班为 []。"""

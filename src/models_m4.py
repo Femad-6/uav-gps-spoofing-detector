@@ -20,6 +20,10 @@ def fit_m4(X_norm: pd.DataFrame, seed: int = SEED) -> IsolationForest:
     model.fit(imp.fit_transform(X_norm[feats]))
     model.feat_names_ = feats
     model.imputer_ = imp
+    # 分数标定仅由训练正常数据确定，避免评测时借用测试集范围。
+    train_scores = -model.decision_function(imp.transform(X_norm[feats]))
+    model.score_min_ = float(train_scores.min())
+    model.score_max_ = float(train_scores.max())
     return model
 
 
@@ -27,5 +31,6 @@ def score_m4(model: IsolationForest, X: pd.DataFrame) -> np.ndarray:
     """归一化异常分数（越大越异常）。"""
     Xm = model.imputer_.transform(X[model.feat_names_])
     s = -model.decision_function(Xm)          # 取反：大值 = 异常
-    lo, hi = s.min(), s.max()
+    lo = getattr(model, "score_min_", float(s.min()))
+    hi = getattr(model, "score_max_", float(s.max()))
     return (s - lo) / (hi - lo + 1e-12)

@@ -17,6 +17,8 @@ from src.labels import assign_split, build_labels, load_split, save_split
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--test-frac", type=float, default=0.2)
+    ap.add_argument("--max-flights", type=int, help="仅处理排序后的前 N 个航班（冒烟用）")
+    ap.add_argument("--fresh-split", action="store_true", help="忽略已有划分并重新固定划分")
     args = ap.parse_args()
 
     print(f"[1/4] 加载数据: {DATA_DIR}")
@@ -24,6 +26,11 @@ def main() -> int:
     if not flights:
         print("[error] 未找到飞行日志，请先运行 scripts/download_data.py")
         return 1
+    if args.max_flights is not None:
+        if args.max_flights < 2:
+            print("[error] --max-flights 至少为 2")
+            return 1
+        flights = dict(sorted(flights.items())[:args.max_flights])
     print(f"      共 {len(flights)} 个航班, 例: {sorted(flights)[:3]}")
 
     print("[2/4] 构建标签（攻击区间）")
@@ -36,7 +43,10 @@ def main() -> int:
     print(f"      窗数: {len(X)}, 特征列: {X.shape[1] - 3}, 正样本率: {X['label'].mean():.3f}")
 
     print("[4/4] 训练/测试划分")
-    split = load_split()
+    split = {} if args.fresh_split else load_split()
+    # 数据子集或换版数据不应静默沿用不匹配的航班划分。
+    if set(X["flight_id"].unique()) - set(split):
+        split = {}
     if not split:
         split = assign_split(sorted(X["flight_id"].unique()), test_frac=args.test_frac)
         save_split(split)

@@ -17,12 +17,13 @@ from pathlib import Path
 from typing import List
 
 import joblib
+import numpy as np
 import pandas as pd
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from src.config import ROOT
-from src.data_loader import load_flight
+from src.config import NOMINAL_HZ, ROOT
+from src.data_loader import NORMALIZED_COLUMNS, load_flight
 from src.stream import CausalStreamer, model_predictor
 
 DEFAULT_MODEL_PATH = ROOT / "outputs" / "models" / "m1.joblib"
@@ -31,6 +32,28 @@ DEFAULT_MODEL_PATH = ROOT / "outputs" / "models" / "m1.joblib"
 class PredictRequest(BaseModel):
     flight_id: str = ""
     rows: List[dict]  # 规范化行（来源: load_flight 输出或 20Hz 同名列）
+
+
+def normalize_rows(rows: List[dict]) -> pd.DataFrame:
+    """校验、排序并重采样 API 的规范化行，保证流式窗口始终表示 2 秒。"""
+    raw = pd.DataFrame(rows)
+    if "time_s" not in raw:
+        raise ValueError("rows 必须包含 time_s（秒）")
+    df = raw.reindex(columns=NORMALIZED_COLUMNS).copy()
+    df["time_s"] = pd.to_numeric(df["time_s"], errors="coerce")
+    df = df.dropna(subset=["time_s"]).sort_values("time_s").drop_duplicates("time_s")
+    if len(df) < 3:
+        raise ValueError("有效 time_s 样本不足 3 个")
+    grid = np.arange(df["time_s"].iloc[0], df["time_s"].iloc[-1], 1.0 / NOMINAL_HZ)
+    out = pd.DataFrame({"time_s": grid})
+    for col in NORMALIZED_COLUMNS:
+        if col in ("time_s", "attack"):
+            continue
+        values = pd.to_numeric(df[col], errors="coerce").to_numpy(dtype=float)
+        ok = np.isfinite(values)
+        out[col] = np.interp(grid, df["time_s"].to_numpy()[ok], values[ok]) if ok.any() else np.nan
+    out["attack"] = 0.0
+    return out.reindex(columns=NORMALIZED_COLUMNS)
 
 
 def create_app(model_path: str | os.PathLike | None = None) -> FastAPI:
@@ -71,7 +94,10 @@ def create_app(model_path: str | os.PathLike | None = None) -> FastAPI:
     @app.post("/predict")
     def predict(req: PredictRequest):
         _require_model()
-        df = pd.DataFrame(req.rows)
+        try:
+            df = normalize_rows(req.rows)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
         if len(df) < 40:
             raise HTTPException(400, "rows 至少 40 个样本（20Hz 下 2 秒）")
         return _infer(req.flight_id, df)
