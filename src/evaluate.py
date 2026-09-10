@@ -26,6 +26,32 @@ def best_threshold(df: pd.DataFrame) -> float:
     return best_t
 
 
+def select_operating_threshold(df: pd.DataFrame,
+                               max_false_alarm_rate: float = 0.10) -> tuple[float, float]:
+    """在验证集误报率约束下最大化召回，并用 F1/更高阈值依次打破平局。"""
+    if not 0.0 <= max_false_alarm_rate <= 1.0:
+        raise ValueError("max_false_alarm_rate must be between 0 and 1")
+    labels = df["label"].to_numpy(dtype=int)
+    scores = df["prob_1"].to_numpy(dtype=float)
+    finite = np.isfinite(scores)
+    labels, scores = labels[finite], scores[finite]
+    if not (np.any(labels == 0) and np.any(labels == 1)):
+        raise ValueError("validation data must contain normal and attacked samples")
+    candidates = np.unique(scores)
+    candidates = np.r_[candidates, np.nextafter(float(scores.max()), np.inf)]
+    feasible = []
+    normal = labels == 0
+    for threshold in candidates:
+        pred = scores >= threshold
+        far = float(np.mean(pred[normal]))
+        if far <= max_false_alarm_rate + 1e-12:
+            recall = float(recall_score(labels, pred, zero_division=0))
+            f1 = float(f1_score(labels, pred, zero_division=0))
+            feasible.append((recall, f1, float(threshold), far))
+    _, _, threshold, far = max(feasible, key=lambda row: row[:3])
+    return threshold, far
+
+
 def evaluate_all(preds: Dict[str, pd.DataFrame]) -> Dict[str, dict]:
     """preds: {model: 含 split/label/prob_1/pred/flight_id/window_start_s 列的预测帧}。
 
@@ -34,15 +60,21 @@ def evaluate_all(preds: Dict[str, pd.DataFrame]) -> Dict[str, dict]:
     """
     results = {}
     for name, p in preds.items():
-        tr = p[p["split"] == "train"] if "split" in p.columns else p
-        val = p[p["split"] == "val"] if "split" in p.columns else p.iloc[0:0]
-        te = p[p["split"] == "test"] if "split" in p.columns else p
-        calibration = val if len(val) else tr
-        T = best_threshold(calibration)
+        if "split" not in p.columns:
+            raise ValueError(f"{name} predictions must preserve train/val/test split")
+        val = p[p["split"] == "val"]
+        te = p[p["split"] == "test"]
+        if val.empty or te.empty:
+            raise ValueError(f"{name} predictions require non-empty val and test splits")
+        f1_threshold = best_threshold(val)
+        T, val_far = select_operating_threshold(val)
         y, s = te["label"].to_numpy(), te["prob_1"].to_numpy()
         pred = (s >= T).astype(int)
 
-        res = {"threshold": T, "threshold_source": "val" if len(val) else "train"}
+        res = {"threshold": T, "threshold_source": "val",
+               "threshold_policy": "val_far<=0.10_max_recall",
+               "f1_threshold": f1_threshold,
+               "val_false_alarm_rate": val_far}
         if len(np.unique(y)) > 1:
             res["AUROC"] = float(roc_auc_score(y, s))
             res["AUPRC"] = float(average_precision_score(y, s))
