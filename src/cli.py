@@ -51,10 +51,12 @@ def main() -> int:
     probs = [r["prob"] for r in results]
     out = {
         "flight": str(Path(args.input).name),
-        "spoofing": bool(any(r["alert"] for r in results)),
+        "spoofing": bool(any(r["confirmed_alert"] for r in results)),
         "threshold": threshold,
         "confidence": float(max(probs)) if probs else 0.0,
         "alarm_intervals": streamer.alarm_intervals(),
+        "raw_alert_windows": sum(int(r["alert"]) for r in results),
+        "confirmed_alert_windows": sum(int(r["confirmed_alert"]) for r in results),
         "n_windows": len(results),
         "runtime_s": round(runtime_s, 3),
     }

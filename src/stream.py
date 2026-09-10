@@ -9,6 +9,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 
+from src.alarm import TemporalAlarmPolicy
 from src.config import STRIDE_SECONDS, WINDOW_SECONDS
 from src.features import WINDOW_SIZE, STRIDE, window_extract
 
@@ -39,6 +40,7 @@ class CausalStreamer:
         self.predictor = predictor
         self.feature_extractor = feature_extractor
         self.threshold = threshold
+        self.alarm_policy = TemporalAlarmPolicy(threshold)
         self.buf: deque = deque(maxlen=WINDOW_SIZE)
         self.total = 0
         self.alerts: List[dict] = []
@@ -59,15 +61,17 @@ class CausalStreamer:
         buf_df = pd.DataFrame(self.buf)
         feats = self._features(buf_df)
         prob = float(self.predictor(feats))
-        alert = prob >= self.threshold
+        decision = self.alarm_policy.update(prob)
+        alert = decision.raw_alert
         ws = float(self.buf[0]["time_s"])
-        out = {"window_start_s": ws, "prob": prob, "alert": alert}
-        if alert:
+        out = {"window_start_s": ws, "prob": prob, "alert": alert,
+               "confirmed_alert": decision.confirmed_alert}
+        if decision.confirmed_alert:
             self.alerts.append(out)
         return out
 
     def alarm_intervals(self) -> List[Tuple[float, float]]:
-        """合并相邻报警窗（间隔 <= 2*STRIDE 视为连续）为 [start, end]。"""
+        """合并相邻已确认报警窗为 [start, end]。"""
         if not self.alerts:
             return []
         ws = [a["window_start_s"] for a in self.alerts]

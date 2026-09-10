@@ -7,6 +7,14 @@ from src.models import fit_m1, predict_proba_all
 from src.server import create_app
 
 
+class ConstantProbabilityModel:
+    feat_names_ = []
+    decision_threshold_ = 0.5
+
+    def predict_proba(self, X):
+        return np.tile([0.1, 0.9], (len(X), 1))
+
+
 def _synthetic_df():
     t = np.arange(0, 10.0, 0.05)
     return pd.DataFrame({"time_s": t, "lat": 34.0 + 1e-5 * t, "lon": 108.9,
@@ -85,3 +93,16 @@ def test_api_uses_threshold_stored_in_model(tmp_path):
         "/predict", json={"flight_id": "test", "rows": _rows()}).json()
     assert body["spoofing"] is False
     assert body["threshold"] == 1.1
+
+
+def test_api_does_not_confirm_a_single_high_window(tmp_path):
+    import joblib
+    path = tmp_path / "constant.joblib"
+    joblib.dump(ConstantProbabilityModel(), path)
+    response = TestClient(create_app(model_path=str(path))).post(
+        "/predict", json={"flight_id": "one-window", "rows": _rows(41)})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["raw_alert_windows"] == 1
+    assert body["confirmed_alert_windows"] == 0
+    assert body["spoofing"] is False

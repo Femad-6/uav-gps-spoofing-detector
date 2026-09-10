@@ -36,4 +36,25 @@ def test_alarm_intervals_merging():
             pass
     iv = s.alarm_intervals()
     assert len(iv) == 1
-    assert iv[0][0] == 0.0 and iv[0][1] > iv[0][0]
+    assert iv[0][0] == 2 * STRIDE * 0.05 and iv[0][1] > iv[0][0]
+
+
+def test_single_high_window_is_not_confirmed_spoofing():
+    scores = iter([0.9, 0.1, 0.1, 0.1, 0.1])
+    streamer = CausalStreamer(lambda row: next(scores), threshold=0.5)
+    results = [result for result in
+               (streamer.feed(row) for row in _rows(WINDOW_SIZE + 4 * STRIDE))
+               if result]
+    assert results[0]["alert"] is True
+    assert not any(result["confirmed_alert"] for result in results)
+    assert streamer.alarm_intervals() == []
+
+
+def test_three_of_five_high_windows_confirm_stream_alarm():
+    scores = iter([0.9, 0.1, 0.9, 0.1, 0.9])
+    streamer = CausalStreamer(lambda row: next(scores), threshold=0.5)
+    results = [result for result in
+               (streamer.feed(row) for row in _rows(WINDOW_SIZE + 4 * STRIDE))
+               if result]
+    assert results[-1]["confirmed_alert"] is True
+    assert len(streamer.alarm_intervals()) == 1
