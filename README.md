@@ -4,6 +4,9 @@
 250Hz，含正常与隐蔽 GPS 诱骗飞行），完成多源传感器一致性特征设计、M0–M4 方法对比、
 因果流式在线检测服务（CLI + FastAPI）。
 
+当前严格按航班划分 train/val/test：模型只在 train 拟合，val 选择报警阈值，test 仅用于
+最终评测。修正后的最佳测试 AUROC 为 0.777；跨航线实验显示泛化仍有限，详见报告。
+
 ## 项目结构
 
 ```text
@@ -11,7 +14,7 @@
 │   ├── config.py            # 全局配置（随机种子 42、窗参数、路径）
 │   ├── data_loader.py       # 飞行日志 → 规范化 20Hz DataFrame（自动列名推断）
 │   ├── features.py          # L1 原始统计 + L2 物理一致性 + L3 滑窗特征
-│   ├── labels.py            # attack 区间标签 + 按航班划分 train/test
+│   ├── labels.py            # attack 区间标签 + 按航班划分 train/val/test
 │   ├── models.py            # M0 阈值规则、M1 随机森林（L1 特征）
 │   ├── models_m2.py         # M2 HistGradientBoosting（全特征）
 │   ├── models_m3.py         # M3 BiLSTM（原始时序，可 GPU）
@@ -24,6 +27,7 @@
 │   ├── download_data.py     # 数据下载（gdown + 断点续传重试）
 │   ├── make_dataset.py      # 原始日志 → 窗级特征 parquet + 划分
 │   ├── run_pipeline.py      # M0-M4 训练 + 评测 → metrics.csv + 图表
+│   ├── run_route_holdout.py # 留一航线测试 M1 跨航线泛化
 │   └── run_all.py           # 一键全流程（--tiny 冒烟）
 ├── tests/                   # pytest 测试（核心函数自检）
 ├── data/raw/                # 原始数据（gitignore，脚本下载）
@@ -37,7 +41,7 @@
 
 - Windows/Linux + Python 3.10+（本项目在 Windows 11 / Python 3.12.1 验证）
 - GPU 可选（M3 加速；无 GPU 自动回退 CPU）
-- 依赖：`pip install -r requirements.txt`（建议先创建独立虚拟环境，避免本机全局 pytest 插件干扰）
+- 依赖：`pip install -r requirements.txt`（本次实验的顶层依赖版本见 `requirements-lock.txt`）
 
 ## 数据下载
 
@@ -60,7 +64,7 @@ python scripts/run_all.py --tiny # 冒烟：仅前 3 个航班（~5 分钟，产
 
 ```text
 [1/3] 下载数据 ...   → [done] 数据就绪
-[2/3] 数据管线       → 窗数 N (train X / test Y)，正样本率 P
+[2/3] 数据管线       → 窗数 N (train X / val V / test Y)，正样本率 P
 [3/3] 训练 + 评测    → 每模型训练耗时 + 评测指标表 + [eval] 图表已保存
 [ok] m0 ... m4 训练并保存 -> outputs/models/*.joblib
 [done] 一键流程完成
@@ -68,8 +72,9 @@ python scripts/run_all.py --tiny # 冒烟：仅前 3 个航班（~5 分钟，产
 
 产物清单：
 
-- `outputs/models/{m0,m1,m2,m3,m4}.joblib`
+- `outputs/models/{m0,m1,m1b,m2,m3,m4}.joblib`
 - `outputs/metrics.csv`（各模型 AUROC/AUPRC/F1/漏检率/误报率/检测延迟）
+- `outputs/metrics_route_holdout.csv`（M1 跨航线泛化结果）
 - `outputs/figs/`（roc_pr.png、feature_importance_*.png、timeline_*.png）
 - `data_processed/features_windowed.parquet`（可复现的全量特征）
 
@@ -82,6 +87,7 @@ python scripts/run_all.py --tiny # 冒烟：仅前 3 个航班（~5 分钟，产
 python scripts/make_dataset.py                 # 特征 + 标签 + 划分
 python scripts/run_pipeline.py                 # 训练 M0-M4 + 测评
 python scripts/run_pipeline.py --skip-m3       # 无 torch 时跳过 M3
+python scripts/run_route_holdout.py             # M1 分别留出直线/曲线/随机航线测试
 ```
 
 ## 在线检测
@@ -90,8 +96,10 @@ python scripts/run_pipeline.py --skip-m3       # 无 torch 时跳过 M3
 
 ```bash
 python -m src.cli predict --input data/raw/PX4_Simulation_Data/Merged/Curved/Attacked/log_21_04_2023_07_21_03.csv \
-  --model outputs/models/m2.joblib
+  --model outputs/models/m1.joblib
 ```
+
+默认读取模型训练时由验证集确定的报警阈值；可用 `--threshold` 手动覆盖。
 
 预期输出（JSON）：
 
@@ -99,12 +107,15 @@ python -m src.cli predict --input data/raw/PX4_Simulation_Data/Merged/Curved/Att
 {
   "flight": "log_21_04_2023_07_21_03.csv",
   "spoofing": true,
-  "confidence": 0.99,
-  "alarm_intervals": [[2933.6, 3163.0]],
-  "n_windows": 450,
-  "runtime_s": 1.2
+  "threshold": 0.25,
+  "confidence": 0.965,
+  "alarm_intervals": [[2938.6, 3163.1]],
+  "n_windows": 456,
+  "runtime_s": 22.7
 }
 ```
+
+该输出证明在线因果链路可以运行，不代表已达到部署准确度；独立测试仍有较高误报率。
 
 **API 服务：**
 
@@ -115,20 +126,28 @@ curl -X POST http://127.0.0.1:8000/predict_file -F file=@data/raw/.../log_*.csv
 ```
 
 接口：`GET /healthz`；`POST /predict`（JSON，`rows` 为规范化行的列表，服务会按 `time_s` 排序并重采样至 20Hz，>=40 行）；
-`POST /predict_file`（multipart 上传 CSV）。模型未训练时 `/predict` 返回 503。
+`POST /predict_file`（multipart 上传 CSV，默认上限 50 MiB）。模型未训练时 `/predict` 返回 503。
+
+Docker 服务镜像不内置模型，启动时挂载训练产物：
+
+```bash
+docker build -t uav-spoofing-api .
+docker run --rm -p 8000:8000 -v "${PWD}/outputs/models:/app/outputs/models:ro" uav-spoofing-api
+```
 
 ## 测试
 
 ```bash
-python -m pytest tests/            # 23 个用例，覆盖加载器/特征/标签/模型/评测/流式/API
+python -m pytest tests/            # 28 个用例，覆盖加载器/特征/标签/模型/评测/流式/API
 ```
 
-所有实验固定随机种子（`src/config.py: SEED = 42`），按航班划分训练/测试（`configs/split.json`）。
+所有实验固定随机种子（`src/config.py: SEED = 42`），按航班划分训练/验证/测试（`configs/split.json`）；
+模型仅用训练航班拟合，报警阈值由验证航班选择，测试航班只用于最终报告。
 硬件环境记录见 `docs/environment.md`。
 
 ## AI 工具与开源代码使用声明
 
-- 本项目在 Claude Code（Claude Agent SDK）辅助下完成：方案设计、代码编写、调试与报告草拟；
+- 本项目使用 Claude Code（Claude Agent SDK）与 OpenAI Codex 辅助方案设计、代码编写、调试与报告草拟；
   每一步均由作业者复核并本地验证运行，所有实验数字取自本地运行输出，无编造。
 - 使用的开源库：pandas、numpy、scikit-learn、matplotlib/seaborn、fastapi/uvicorn、pyarrow、
   pytest、torch（完整列表见 `requirements.txt`）。

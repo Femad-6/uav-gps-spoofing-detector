@@ -110,6 +110,7 @@ def predict_proba_all(model, X: pd.DataFrame) -> pd.DataFrame:
         "flight_id": Xd.get("flight_id", pd.Series(["", ] * len(Xd))),
         "window_start_s": Xd.get("window_start_s", pd.Series(np.nan, index=Xd.index)),
         "label": Xd.get("label", pd.Series(np.nan, index=Xd.index)),
+        "split": Xd.get("split", pd.Series("", index=Xd.index)),
         "prob_1": p,
     })
     if not has_meta:

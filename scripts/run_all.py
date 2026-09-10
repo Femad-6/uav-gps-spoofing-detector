@@ -47,7 +47,7 @@ def main() -> int:
 
     if not args.skip_train:
         print("[3/3] 训练 + 评测 ...")
-        models = "m0,m1,m2,m4" if args.tiny else "m0,m1,m2,m3,m4"
+        models = "m0,m1,m1b,m2,m4" if args.tiny else "m0,m1,m1b,m2,m3,m4"
         r = subprocess.run([sys.executable, "scripts/run_pipeline.py", "--models", models], cwd=ROOT, env=env)
         if r.returncode != 0:
             return r.returncode

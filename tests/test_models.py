@@ -22,3 +22,13 @@ def test_fit_m1_is_deterministic():
     c2 = predict_proba_all(m2, X)
     assert c1["prob_1"].tolist() == c2["prob_1"].tolist()
     assert set(c1.columns) >= {"prob_1", "pred", "flight_id", "window_start_s", "label"}
+
+
+def test_predict_proba_all_preserves_split_metadata():
+    rng = np.random.default_rng(9)
+    X = pd.DataFrame(rng.normal(size=(30, 4)), columns=[f"f_{i}" for i in range(4)])
+    X["split"] = ["train"] * 10 + ["val"] * 10 + ["test"] * 10
+    y = pd.Series([0, 1] * 15)
+    model = fit_m1(X, y)
+    out = predict_proba_all(model, X)
+    assert out["split"].tolist() == X["split"].tolist()

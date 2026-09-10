@@ -65,3 +65,23 @@ def test_predict_without_model_returns_503():
     client = TestClient(app)
     r = client.post("/predict", json={"flight_id": "t", "rows": _rows()})
     assert r.status_code == 503
+
+
+def test_predict_file_rejects_oversized_upload(tmp_path):
+    app = create_app(model_path=str(tmp_path / "m.joblib"), max_upload_bytes=32)
+    _train_model(tmp_path / "m.joblib")
+    r = TestClient(app).post(
+        "/predict_file", files={"file": ("large.csv", b"x" * 33, "text/csv")})
+    assert r.status_code == 413
+
+
+def test_api_uses_threshold_stored_in_model(tmp_path):
+    path = tmp_path / "m.joblib"
+    model = _train_model(path)
+    model.decision_threshold_ = 1.1
+    import joblib
+    joblib.dump(model, path)
+    body = TestClient(create_app(model_path=str(path))).post(
+        "/predict", json={"flight_id": "test", "rows": _rows()}).json()
+    assert body["spoofing"] is False
+    assert body["threshold"] == 1.1

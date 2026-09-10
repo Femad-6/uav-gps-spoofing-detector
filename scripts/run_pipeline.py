@@ -68,8 +68,10 @@ def main() -> int:
         print("[error] 未找到窗级数据集，请先运行 scripts/make_dataset.py")
         return 1
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    tr, te = X[X["split"] == "train"], X[X["split"] == "test"]
-    print(f"[data] 窗数 {len(X)} (train {len(tr)} / test {len(te)})")
+    tr = X[X["split"] == "train"]
+    val = X[X["split"] == "val"]
+    te = X[X["split"] == "test"]
+    print(f"[data] 窗数 {len(X)} (train {len(tr)} / val {len(val)} / test {len(te)})")
 
     preds, models = {}, {}
 
@@ -132,9 +134,10 @@ def main() -> int:
             y_seq = np.array([lookup[k] for k in keys], dtype="float32")
             split_seq = np.array([split_lookup[k] for k in keys])
             train_idx = np.where(split_seq == "train")[0]
+            val_idx = np.where(split_seq == "val")[0]
             test_idx = np.where(split_seq == "test")[0]
-            if not len(train_idx) or not len(test_idx):
-                raise ValueError("M3 需要同时存在训练与测试航班")
+            if not len(train_idx) or not len(val_idx) or not len(test_idx):
+                raise ValueError("M3 需要同时存在训练、验证与测试航班")
             # 仅在训练集内分层下采样以控制 GPU 显存；测试集绝不参与拟合。
             if len(train_idx) > 20000:
                 rng = np.random.default_rng(SEED)
@@ -146,8 +149,8 @@ def main() -> int:
                 rng.shuffle(train_idx)
             m3 = fit_m3(X_seq[train_idx].astype("float32"), y_seq[train_idx],
                         seq_len=WINDOW_SIZE, seed=SEED)
-            # 训练窗用于阈值选择，测试窗仅在模型冻结后预测。
-            eval_idx = np.concatenate([train_idx, test_idx])
+            # 验证窗用于阈值选择，测试窗仅在模型冻结后预测。
+            eval_idx = np.concatenate([train_idx, val_idx, test_idx])
             p3 = predict_m3(m3, X_seq[eval_idx].astype("float32"))
             frame = pd.DataFrame({"flight_id": [keys[i][0] for i in eval_idx],
                                   "window_start_s": [keys[i][1] for i in eval_idx],
@@ -165,6 +168,9 @@ def main() -> int:
         return 1
 
     metrics = evaluate_all(preds)
+    for name, model in models.items():
+        model.decision_threshold_ = float(metrics[name]["threshold"])
+        joblib.dump(model, MODEL_DIR / f"{name}.joblib")
     save_metrics(metrics, OUTPUT_DIR / "metrics.csv")
     print("\n=== 评测结果 (test) ===")
     print(pd.DataFrame(metrics).T.round(3).to_string())

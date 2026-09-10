@@ -22,7 +22,7 @@ def main() -> int:
     p = sub.add_parser("predict", help="对一段飞行数据做流式检测")
     p.add_argument("--input", required=True, help="飞行日志 CSV")
     p.add_argument("--model", default="outputs/models/m1.joblib", help="模型文件 (joblib)")
-    p.add_argument("--threshold", type=float, default=0.5, help="报警阈值")
+    p.add_argument("--threshold", type=float, help="报警阈值（默认读取模型的验证集阈值）")
     args = ap.parse_args()
 
     model_path = Path(args.model)
@@ -37,7 +37,10 @@ def main() -> int:
         print(json.dumps({"error": "飞行数据过短或解析失败"}, ensure_ascii=False), file=sys.stderr)
         return 1
 
-    streamer = CausalStreamer(model_predictor(model), threshold=args.threshold)
+    threshold = args.threshold
+    if threshold is None:
+        threshold = float(getattr(model, "decision_threshold_", 0.5))
+    streamer = CausalStreamer(model_predictor(model), threshold=threshold)
     results = []
     for row in df.to_dict("records"):
         r = streamer.feed(row)
@@ -49,6 +52,7 @@ def main() -> int:
     out = {
         "flight": str(Path(args.input).name),
         "spoofing": bool(any(r["alert"] for r in results)),
+        "threshold": threshold,
         "confidence": float(max(probs)) if probs else 0.0,
         "alarm_intervals": streamer.alarm_intervals(),
         "n_windows": len(results),

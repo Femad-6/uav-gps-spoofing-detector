@@ -1,4 +1,4 @@
-"""标签构建（由 attack 列提取攻击区间）与按航班训练/测试划分。"""
+"""标签构建与按航班训练/验证/测试划分。"""
 from __future__ import annotations
 
 import json
@@ -16,13 +16,33 @@ def build_labels(all_flights: Dict[str, pd.DataFrame]) -> Dict[str, List[Tuple[f
     return {fid: attack_intervals(df) for fid, df in all_flights.items()}
 
 
-def assign_split(flights: List[str], test_frac: float = 0.2, seed: int = SEED) -> Dict[str, str]:
-    """按航班划分 train/test（固定 seed 可复现，航班不重叠）。"""
+def assign_split(flights: List[str], test_frac: float = 0.2, val_frac: float = 0.1,
+                 seed: int = SEED) -> Dict[str, str]:
+    """按航班划分 train/val/test（固定 seed，三个集合航班互斥）。"""
+    if len(flights) < 3:
+        raise ValueError("至少需要 3 个航班才能划分 train/val/test")
     rng = random.Random(seed)
     flights = sorted(flights)
     n_test = max(1, int(round(len(flights) * test_frac)))
     test = set(rng.sample(flights, n_test))
-    return {f: ("test" if f in test else "train") for f in flights}
+    remaining = [f for f in flights if f not in test]
+    n_val = min(max(1, int(round(len(flights) * val_frac))), len(remaining) - 1)
+    val = set(rng.sample(remaining, n_val))
+    return {f: ("test" if f in test else "val" if f in val else "train") for f in flights}
+
+
+def assign_route_holdout(flights: List[str], test_route: str,
+                         val_frac: float = 0.1, seed: int = SEED) -> Dict[str, str]:
+    """指定一种航线全部作为测试集，其余航班按航班抽取验证集。"""
+    marker = f"_{test_route}_"
+    test = {f for f in flights if marker.lower() in f"_{f}_".lower()}
+    remaining = sorted(set(flights) - test)
+    if not test or len(remaining) < 2:
+        raise ValueError(f"无法为航线 {test_route} 构造跨航线划分")
+    rng = random.Random(seed)
+    n_val = min(max(1, int(round(len(remaining) * val_frac))), len(remaining) - 1)
+    val = set(rng.sample(remaining, n_val))
+    return {f: ("test" if f in test else "val" if f in val else "train") for f in flights}
 
 
 def load_split() -> Dict[str, str]:

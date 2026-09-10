@@ -16,7 +16,7 @@ from sklearn.metrics import (average_precision_score, f1_score,
 
 
 def best_threshold(df: pd.DataFrame) -> float:
-    """在（训练）预测上滑阈值搜索最大化 F1 的 T。"""
+    """在验证预测上滑阈值搜索最大化 F1 的 T。"""
     best_t, best_f1 = 0.5, -1.0
     for t in np.arange(0.05, 0.95, 0.05):
         pred = (df["prob_1"] >= t).astype(int)
@@ -35,12 +35,14 @@ def evaluate_all(preds: Dict[str, pd.DataFrame]) -> Dict[str, dict]:
     results = {}
     for name, p in preds.items():
         tr = p[p["split"] == "train"] if "split" in p.columns else p
+        val = p[p["split"] == "val"] if "split" in p.columns else p.iloc[0:0]
         te = p[p["split"] == "test"] if "split" in p.columns else p
-        T = best_threshold(tr)
+        calibration = val if len(val) else tr
+        T = best_threshold(calibration)
         y, s = te["label"].to_numpy(), te["prob_1"].to_numpy()
         pred = (s >= T).astype(int)
 
-        res = {"threshold": T}
+        res = {"threshold": T, "threshold_source": "val" if len(val) else "train"}
         if len(np.unique(y)) > 1:
             res["AUROC"] = float(roc_auc_score(y, s))
             res["AUPRC"] = float(average_precision_score(y, s))

@@ -5,7 +5,7 @@ POST /predict              body: {flight_id, rows:[规范化行...]} -> 流式�
 POST /predict_file         multipart CSV -> 流式推理 JSON
 
 启动: uvicorn src.server:app --port 8000
-模型路径: 环境变量 SPOOFING_MODEL_PATH（默认 outputs/models/m2.joblib），
+模型路径: 环境变量 SPOOFING_MODEL_PATH（默认 outputs/models/m1.joblib），
 模型未就绪时 /predict 返回 503（服务本身可启动）。
 """
 from __future__ import annotations
@@ -27,6 +27,8 @@ from src.data_loader import NORMALIZED_COLUMNS, load_flight
 from src.stream import CausalStreamer, model_predictor
 
 DEFAULT_MODEL_PATH = ROOT / "outputs" / "models" / "m1.joblib"
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+MAX_ROWS = 200_000
 
 
 class PredictRequest(BaseModel):
@@ -56,7 +58,8 @@ def normalize_rows(rows: List[dict]) -> pd.DataFrame:
     return out.reindex(columns=NORMALIZED_COLUMNS)
 
 
-def create_app(model_path: str | os.PathLike | None = None) -> FastAPI:
+def create_app(model_path: str | os.PathLike | None = None,
+               max_upload_bytes: int = MAX_UPLOAD_BYTES) -> FastAPI:
     model_path = Path(model_path or os.environ.get("SPOOFING_MODEL_PATH", DEFAULT_MODEL_PATH))
     app = FastAPI(title="UAV GPS Spoofing Detector", version="1.0")
     app.state.model_path = model_path
@@ -66,7 +69,8 @@ def create_app(model_path: str | os.PathLike | None = None) -> FastAPI:
         return {"status": "ok"}
 
     def _infer(flight_id: str, df: pd.DataFrame) -> dict:
-        streamer = CausalStreamer(model_predictor(app.state.model))
+        threshold = float(getattr(app.state.model, "decision_threshold_", 0.5))
+        streamer = CausalStreamer(model_predictor(app.state.model), threshold=threshold)
         t0 = time.time()
         results = []
         for row in df.to_dict("records"):
@@ -77,6 +81,7 @@ def create_app(model_path: str | os.PathLike | None = None) -> FastAPI:
         return {
             "flight": flight_id,
             "spoofing": bool(any(r["alert"] for r in results)),
+            "threshold": threshold,
             "confidence": float(max(probs)) if probs else 0.0,
             "alarm_intervals": streamer.alarm_intervals(),
             "n_windows": len(results),
@@ -94,6 +99,8 @@ def create_app(model_path: str | os.PathLike | None = None) -> FastAPI:
     @app.post("/predict")
     def predict(req: PredictRequest):
         _require_model()
+        if len(req.rows) > MAX_ROWS:
+            raise HTTPException(413, f"rows 超过上限 {MAX_ROWS}")
         try:
             df = normalize_rows(req.rows)
         except ValueError as e:
@@ -105,7 +112,9 @@ def create_app(model_path: str | os.PathLike | None = None) -> FastAPI:
     @app.post("/predict_file")
     async def predict_file(file: UploadFile = File(...)):
         _require_model()
-        content = await file.read()
+        content = await file.read(max_upload_bytes + 1)
+        if len(content) > max_upload_bytes:
+            raise HTTPException(413, f"上传文件超过 {max_upload_bytes} 字节上限")
         try:
             df = load_flight(io.BytesIO(content))
         except Exception as e:

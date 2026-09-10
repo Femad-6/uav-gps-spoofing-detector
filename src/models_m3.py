@@ -87,13 +87,16 @@ def fit_m3(X_seq: np.ndarray, y_seq: np.ndarray, seq_len: int = 40,
     return model
 
 
-def predict_m3(model: SpoofLSTM, X_seq: np.ndarray, device: str | None = None) -> np.ndarray:
+def predict_m3(model: SpoofLSTM, X_seq: np.ndarray, device: str | None = None,
+               batch_size: int = 1024) -> np.ndarray:
     import torch
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     model.eval()
+    outputs = []
     with torch.no_grad():
         mean = model.norm_mean_.to(device)
         std = model.norm_std_.to(device)
-        x = torch.as_tensor(X_seq, dtype=torch.float32, device=device)
-        x = (x - mean) / std
-        return model(x).cpu().numpy()
+        for start in range(0, len(X_seq), batch_size):
+            x = torch.as_tensor(X_seq[start:start + batch_size], dtype=torch.float32, device=device)
+            outputs.append(model((x - mean) / std).cpu().numpy())
+    return np.concatenate(outputs) if outputs else np.empty(0, dtype=float)

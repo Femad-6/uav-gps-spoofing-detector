@@ -27,8 +27,8 @@ def main() -> int:
         print("[error] 未找到飞行日志，请先运行 scripts/download_data.py")
         return 1
     if args.max_flights is not None:
-        if args.max_flights < 2:
-            print("[error] --max-flights 至少为 2")
+        if args.max_flights < 3:
+            print("[error] --max-flights 至少为 3")
             return 1
         flights = dict(sorted(flights.items())[:args.max_flights])
     print(f"      共 {len(flights)} 个航班, 例: {sorted(flights)[:3]}")
@@ -47,6 +47,8 @@ def main() -> int:
     # 数据子集或换版数据不应静默沿用不匹配的航班划分。
     if set(X["flight_id"].unique()) - set(split):
         split = {}
+    if split and "val" not in split.values():
+        split = {}
     if not split:
         split = assign_split(sorted(X["flight_id"].unique()), test_frac=args.test_frac)
         save_split(split)
@@ -55,7 +57,8 @@ def main() -> int:
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     out = PROCESSED_DIR / "features_windowed.parquet"
     X.to_parquet(out, index=False)
-    print(f"[done] 保存: {out} (train {len(X[X.split == 'train'])}, test {len(X[X.split == 'test'])})")
+    print(f"[done] 保存: {out} (train {len(X[X.split == 'train'])}, "
+          f"val {len(X[X.split == 'val'])}, test {len(X[X.split == 'test'])})")
     return 0
 
 
