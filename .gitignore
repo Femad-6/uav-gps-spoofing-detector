@@ -11,3 +11,6 @@ __pycache__/
 submit.tar.gz
 2026推免短期综合任务.md
 docs/demo-script.md
+
+# 本地阅读的第三方论文；公开报告使用 DOI 链接
+papers/

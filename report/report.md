@@ -2,6 +2,7 @@
 
 > 对应任务：2026 推免短期综合任务 ｜ 完成日期：2026-09-09 ｜ 复核更新：2026-09-10
 > 所有数字来自本机运行输出（`outputs/metrics.csv`、`outputs/figs/`），可一键复现：`python scripts/run_all.py`
+> 数据集与方法学参照：Finn 等（INFOCOM WKSHPS 2024）；本文报告中的实验指标仅指本仓库的独立复现实验。
 
 ---
 
@@ -23,7 +24,7 @@
 
 ## 2. 数据集介绍与预处理
 
-**数据集**：UAV-GPS-Spoofing-Dataset（IEEE INFOCOM 2024 论文配套）：
+**数据集**：UAV-GPS-Spoofing-Dataset（[Finn 等，2024](https://doi.org/10.1109/INFOCOMWKSHPS61880.2024.10620818)论文配套）：
 PX4-SITL + Gazebo-Classic 仿真采集（2023），250Hz，四类传感器
 （GPS/IMU/气压计/磁罗盘），航线为直线/曲线/随机三种，各含 1 正常 + 2 攻击航班
 的多样本。攻击方式为"隐蔽式"：每次 GPS 更新对上报位置做极小增量偏移，使 EKF
@@ -76,6 +77,28 @@ linear_acceleration_x/y/z, magnetic_field_x/y/z`），其中 216 个航班含攻
 
 所有监督模型训练/评测共用同一特征管线、同一划分；随机种子固定 42。
 
+### 3.3 与同源论文的关系：复现边界与方法扩展
+
+本项目的数据来源与 Finn 等的原论文相同，但**不是对原论文代码或数值的直接复刻**。原论文使用
+GPS、IMU、磁力计和气压计四类机载传感器，从中构造 30 项特征；其数据处理选择 5Hz 采样、0.5s
+时间窗，并比较 XGBoost、GBDT、LSTM、BiLSTM 和 RNN。原文报告 XGBoost 在特定实验设置下的最高
+AUC 为 0.98716。该数值是原文的结果，不应作为本项目结果引用。
+
+本项目保留“机载多传感器融合检测隐蔽诱骗”的问题设定，但在实现与评测上作了以下可追溯的扩展：
+
+| 维度 | Finn 等（2024） | 本项目 |
+|---|---|---|
+| 数据处理 | 5Hz、0.5s 窗 | 20Hz、2s 窗、0.5s 步长 |
+| 特征 | 30 项传感器特征 | 66 项窗口统计 + 5 项物理一致性特征 |
+| 模型重点 | XGBoost / GBDT / RNN 系列 | RF、HistGradientBoosting、BiLSTM、Isolation Forest |
+| 划分描述 | 60/20/20 train/val/test；原文未明确说明是否按航班互斥 | 固定的航班级互斥 252/36/72 train/val/test |
+| 报告重点 | 指定场景下的检测性能 | 严格隔离后的误报、跨航线泛化与在线因果语义 |
+
+因此，原论文为本项目提供数据集背景、传感器选择与候选模型依据；本项目的 M0--M4 指标则必须以
+`outputs/metrics.csv` 为准。尤其是，原论文的高 AUC 与本项目 0.777 的最佳 AUROC 不能直接横向
+比较：窗口长度、采样率、特征、模型、数据划分单位和评测约束均不同。将原文的结果与本项目严格的
+航班级划分结果并列，正好说明评测协议会实质影响结论。
+
 ## 4. 实验设置、指标和运行环境
 
 - **环境**：Windows 11 / Python 3.12.1；GPU NVIDIA GeForce RTX 4050 Laptop（6GB, CUDA 12.7,
@@ -116,6 +139,9 @@ linear_acceleration_x/y/z, magnetic_field_x/y/z`），其中 216 个航班含攻
 5. **无监督方法当前不可用**：M4 AUROC 0.337、误报率 0.922，详见 5.4。
 6. **在线机制成立，检测效果仍不合格**：逐窗推理只使用历史数据，单航段约 23–25 秒处理完，
    但正常航班也可能报警，因此在线接口只能作为工程演示，不能作为安全部署结论。
+7. **与同源论文不应混用数值**：原论文的 XGBoost 报告了 0.98716 的最高 AUC；本项目在航班级
+   互斥、验证集选阈值及独立测试的协议下，最佳 AUROC 为 0.777。两者实验设置不同，本报告不将
+   前者表述为本项目的复现精度，且把当前误报率和跨航线结果作为更严格的证据边界。
 
 ### 5.3 在线检测演示路径
 
@@ -172,6 +198,8 @@ uvicorn src.server:app --port 8000                     # FastAPI: /healthz /pred
 - 对 GPS 高度欺骗/组合攻击扩展 L2 特征（真实假说里高度一致性会在"全维欺骗"下失效）；
 - 无监督路线：先做飞行阶段分割（真值/降落地标），再在巡航段内做异常检测；
 - 按飞行阶段建模，并设计对航线变化不敏感的相对残差；
+- 参照 Finn 等对窗口长度的讨论，在不触碰测试集的前提下，仅用训练/验证集比较 0.5s、1s、2s、
+  5s 等上下文长度；将检测速度与误报率一并报告，而不是只追求 AUROC；
 - M3 尝试更长时间上下文（8–10s）与 attention；在线服务增加批次流式与窗口重叠模糊处理；
 - 引入真实 GPS 原始信号级数据（RTKLIB/软件接收机输出）做跨域验证。
 
@@ -185,8 +213,10 @@ uvicorn src.server:app --port 8000                     # FastAPI: /healthz /pred
   pyarrow、pytest、torch（`requirements.txt`）。Google Drive 下载使用 gdown。
 - **数据集/参考资料**：
   - UAV-GPS-Spoofing-Dataset（Anthony Finn 等，本文档 2 节）；
-  - 论文：Finn, Jia, Li, Yuan, *Detecting Stealthy GPS Spoofing Attack Against UAVs Using
-    Onboard Sensors*, IEEE INFOCOM WKSHPS 2024（仅参考实验设计与特征表，检测代码为自主实现）；
+   - 论文：Finn, Jia, Li, Yuan, *Detecting Stealthy GPS Spoofing Attack Against UAVs Using
+     Onboard Sensors*, IEEE INFOCOM WKSHPS 2024, DOI: `10.1109/INFOCOMWKSHPS61880.2024.10620818`。
+     该文
+     仅作为数据集、传感器选择和实验设计的参考；本项目检测代码、划分和结果均为自主实现与本地运行；
   - PX4 SITL / Gazebo 官方文档（理解日志字段语义）。
 - **未使用**：本任务数据集中原作者论文实现或任何第三方检测器代码；结果对比表仅含自主实现。
 
