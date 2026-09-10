@@ -14,11 +14,12 @@ from src.models import _feature_columns
 
 
 def fit_m4(X_norm: pd.DataFrame, seed: int = SEED) -> IsolationForest:
-    feats = _feature_columns(X_norm, None)
+    feats = _feature_columns(X_norm, ("f_", "c_"))
     imp = SimpleImputer(strategy="median")
     model = IsolationForest(n_estimators=200, random_state=seed, n_jobs=-1)
     model.fit(imp.fit_transform(X_norm[feats]))
     model.feat_names_ = feats
+    model.feature_family_ = "legacy"
     model.imputer_ = imp
     # 分数标定仅由训练正常数据确定，避免评测时借用测试集范围。
     train_scores = -model.decision_function(imp.transform(X_norm[feats]))

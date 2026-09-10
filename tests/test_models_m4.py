@@ -5,7 +5,8 @@ from src.models_m4 import fit_m4, score_m4
 
 
 def test_m4_scores_attacks_higher():
-    norm = pd.DataFrame(np.random.default_rng(0).normal(size=(200, 6)))
+    norm = pd.DataFrame(np.random.default_rng(0).normal(size=(200, 6)),
+                        columns=[f"f_{i}" for i in range(6)])
     X = pd.concat([norm, norm * 5])
     m = fit_m4(norm)
     s = score_m4(m, X)
@@ -14,9 +15,19 @@ def test_m4_scores_attacks_higher():
 
 def test_m4_test_score_does_not_depend_on_other_test_rows():
     rng = np.random.default_rng(7)
-    normal = pd.DataFrame(rng.normal(size=(100, 4)))
-    held_out = pd.DataFrame(rng.normal(loc=3, size=(20, 4)))
+    cols = [f"f_{i}" for i in range(4)]
+    normal = pd.DataFrame(rng.normal(size=(100, 4)), columns=cols)
+    held_out = pd.DataFrame(rng.normal(loc=3, size=(20, 4)), columns=cols)
     model = fit_m4(normal)
     alone = score_m4(model, held_out)
     combined = score_m4(model, pd.concat([held_out, normal * 20], ignore_index=True))[:len(held_out)]
     assert np.allclose(alone, combined)
+
+
+def test_m4_legacy_features_exclude_enhanced_columns():
+    rng = np.random.default_rng(13)
+    normal = pd.DataFrame({"f_a": rng.normal(size=40),
+                           "c_a": rng.normal(size=40),
+                           "e_a": rng.normal(size=40)})
+    model = fit_m4(normal)
+    assert model.feat_names_ == ["f_a", "c_a"]

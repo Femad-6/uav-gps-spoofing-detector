@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from src.models import ThresholdDetector, fit_m1, predict_proba_all
+from src.models import ThresholdDetector, _feature_columns, fit_m1, predict_proba_all
 
 
 def test_threshold_detector_detects_divergent_window():
@@ -32,3 +32,17 @@ def test_predict_proba_all_preserves_split_metadata():
     model = fit_m1(X, y)
     out = predict_proba_all(model, X)
     assert out["split"].tolist() == X["split"].tolist()
+
+
+def test_feature_prefix_tuple_excludes_enhanced_columns():
+    X = pd.DataFrame({"f_a": [0.0], "c_a": [0.0], "e_a": [0.0]})
+    assert _feature_columns(X, ("f_", "c_")) == ["f_a", "c_a"]
+
+
+def test_m1b_style_legacy_features_exclude_enhanced_columns():
+    rng = np.random.default_rng(12)
+    X = pd.DataFrame({"f_a": rng.normal(size=40),
+                      "c_a": rng.normal(size=40),
+                      "e_a": rng.normal(size=40)})
+    model = fit_m1(X, pd.Series([0, 1] * 20), features=("f_", "c_"))
+    assert model.feat_names_ == ["f_a", "c_a"]

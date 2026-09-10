@@ -20,11 +20,11 @@ from src.evaluate import evaluate_all, plot_all, save_metrics
 from src.features import WINDOW_SIZE, STRIDE
 from src.labels import load_dataset
 from src.models import ThresholdDetector, fit_m1, predict_proba_all
-from src.models_m2 import fit_m2
+from src.models_m2 import fit_m2, fit_m2e
 from src.models_m3 import RAW_COLUMNS, fit_m3, predict_m3
 from src.models_m4 import fit_m4, score_m4
 
-ALL_MODELS = ["m0", "m1", "m1b", "m2", "m3", "m4"]
+ALL_MODELS = ["m0", "m1", "m1b", "m2", "m2e", "m3", "m4"]
 
 
 def _m0_preds(detector: ThresholdDetector, X: pd.DataFrame) -> pd.DataFrame:
@@ -96,7 +96,7 @@ def main() -> int:
 
     if "m1b" in wanted:   # 消融: RF 全特征（检验 L2 特征对 RF 的影响）
         t0 = time.time()
-        m1b = fit_m1(tr, tr["label"], features=None)
+        m1b = fit_m1(tr, tr["label"], features=("f_", "c_"))
         _finalize("m1b", predict_proba_all(m1b, X), m1b)
         print(f"     训练耗时 {time.time() - t0:.1f}s")
 
@@ -104,6 +104,12 @@ def main() -> int:
         t0 = time.time()
         m2 = fit_m2(tr, tr["label"])
         _finalize("m2", predict_proba_all(m2, X), m2)
+        print(f"     训练耗时 {time.time() - t0:.1f}s")
+
+    if "m2e" in wanted:
+        t0 = time.time()
+        m2e = fit_m2e(tr, tr["label"])
+        _finalize("m2e", predict_proba_all(m2e, X), m2e)
         print(f"     训练耗时 {time.time() - t0:.1f}s")
 
     if "m4" in wanted:

@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -66,16 +66,18 @@ class ThresholdDetector:
         return float(min(1.0, mz / 3.0))
 
 
-def _feature_columns(X: pd.DataFrame, prefix: str | None) -> List[str]:
-    """取特征列：剔除元数据列，可选按前缀过滤（'f_'=L1、'c_'=L2、None=全部）。"""
+def _feature_columns(X: pd.DataFrame,
+                     prefix: str | Tuple[str, ...] | None) -> List[str]:
+    """取特征列；可按一个或多个前缀过滤，None 表示全部特征。"""
     feats = [c for c in X.columns if c not in META_COLUMNS]
     if prefix is not None:
-        feats = [c for c in feats if isinstance(c, str) and c.startswith(prefix)]
+        prefixes = (prefix,) if isinstance(prefix, str) else prefix
+        feats = [c for c in feats if isinstance(c, str) and c.startswith(prefixes)]
     return feats
 
 
 def fit_m1(X_tr: pd.DataFrame, y_tr, model_type: str = "random_forest",
-           seed: int = SEED, features: str | None = "f_"):
+           seed: int = SEED, features: str | Tuple[str, ...] | None = "f_"):
     """监督分类器（默认仅 L1 的 f_* 列）。模型对象带 feat_names_/imputer_ 属性。"""
     feats = _feature_columns(X_tr, features)
     if not feats:
@@ -92,6 +94,9 @@ def fit_m1(X_tr: pd.DataFrame, y_tr, model_type: str = "random_forest",
     if hasattr(model, "n_jobs"):
         model.n_jobs = 1
     model.feat_names_ = feats
+    model.feature_family_ = ("all" if features is None else
+                             "legacy" if not any(c.startswith("e_") for c in feats)
+                             else "enhanced")
     model.imputer_ = imp
     return model
 
