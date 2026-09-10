@@ -58,3 +58,23 @@ def test_operating_threshold_rejects_single_class_validation(labels):
     with pytest.raises(ValueError, match="normal and attacked"):
         select_operating_threshold(
             pd.DataFrame({"label": labels, "prob_1": [0.1, 0.9]}))
+
+
+def test_confirmed_metrics_suppress_isolated_test_spikes():
+    rows = []
+    for split, fid, labels, scores in [
+        ("train", "tr", [0, 1], [0.1, 0.9]),
+        ("val", "va", [0, 0, 0, 1, 1], [0.1, 0.2, 0.3, 0.8, 0.9]),
+        ("test", "normal", [0, 0, 0, 0, 0], [0.1, 0.85, 0.1, 0.1, 0.1]),
+        ("test", "attacked", [1, 1, 1, 1, 1], [0.9, 0.9, 0.9, 0.1, 0.1]),
+    ]:
+        for index, (label, score) in enumerate(zip(labels, scores)):
+            rows.append({"split": split, "flight_id": fid,
+                         "window_start_s": index * 0.5, "label": label,
+                         "prob_1": score, "pred": int(score >= 0.5)})
+    metrics = evaluate_all({"m": pd.DataFrame(rows)})["m"]
+    assert metrics["false_alarm_rate"] > 0.0
+    assert metrics["confirmed_false_alarm_rate"] == 0.0
+    assert metrics["confirmed_recall"] > 0.0
+    assert metrics["confirmed_missed_flights_rate"] == 0.0
+    assert metrics["confirmed_delay_mean_s"] == 1.0

@@ -12,6 +12,8 @@ from sklearn.metrics import (average_precision_score, f1_score,
                              precision_recall_curve, precision_score,
                              recall_score, roc_auc_score, roc_curve)
 
+from src.alarm import TemporalAlarmPolicy
+
 # from src.config import OUTPUT_DIR
 
 
@@ -109,6 +111,48 @@ def evaluate_all(preds: Dict[str, pd.DataFrame]) -> Dict[str, dict]:
         res["false_alarm_rate"] = float(fa_num / fa_den) if fa_den else np.nan
         res["delay_mean_s"] = float(np.mean(delays)) if delays else np.nan
         res["delay_median_s"] = float(np.median(delays)) if delays else np.nan
+
+        # 与在线服务相同的 3-of-5 + 迟滞策略，且每个航班重置状态。
+        confirmed = pd.Series(0, index=te.index, dtype=int)
+        for _, group in te.groupby("flight_id"):
+            policy = TemporalAlarmPolicy(T)
+            ordered = group.sort_values("window_start_s")
+            decisions = [int(policy.update(score).confirmed_alert)
+                         for score in ordered["prob_1"].to_numpy(dtype=float)]
+            confirmed.loc[ordered.index] = decisions
+        res["confirmed_F1"] = float(f1_score(y, confirmed.to_numpy(), zero_division=0))
+        res["confirmed_precision"] = float(
+            precision_score(y, confirmed.to_numpy(), zero_division=0))
+        res["confirmed_recall"] = float(
+            recall_score(y, confirmed.to_numpy(), zero_division=0))
+
+        confirmed_df = te_df.copy()
+        confirmed_df["pred"] = confirmed.to_numpy()
+        confirmed_delays, confirmed_missed = [], 0
+        confirmed_attacked, confirmed_fa_num, confirmed_fa_den = 0, 0, 0
+        for _, group in confirmed_df.groupby("flight_id"):
+            attacked_w = group[group["label"] == 1]
+            if len(attacked_w):
+                confirmed_attacked += 1
+                attack_start = attacked_w["window_start_s"].min()
+                alerts = attacked_w[attacked_w["pred"] == 1]["window_start_s"]
+                if len(alerts):
+                    confirmed_delays.append(alerts.min() - attack_start)
+                else:
+                    confirmed_missed += 1
+            confirmed_fa_num += int(
+                ((group["pred"] == 1) & (group["label"] == 0)).sum())
+            confirmed_fa_den += int((group["label"] == 0).sum())
+        res["confirmed_missed_flights_rate"] = (
+            float(confirmed_missed / confirmed_attacked)
+            if confirmed_attacked else np.nan)
+        res["confirmed_false_alarm_rate"] = (
+            float(confirmed_fa_num / confirmed_fa_den)
+            if confirmed_fa_den else np.nan)
+        res["confirmed_delay_mean_s"] = (
+            float(np.mean(confirmed_delays)) if confirmed_delays else np.nan)
+        res["confirmed_delay_median_s"] = (
+            float(np.median(confirmed_delays)) if confirmed_delays else np.nan)
         results[name] = res
     return results
 
