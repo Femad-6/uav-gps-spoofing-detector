@@ -1,11 +1,13 @@
 # 无人机 GPS 诱骗检测与安全分析
 
 2026 推免短期综合任务。基于公开 UAV-GPS-Spoofing-Dataset（PX4/Gazebo 仿真实机日志，
-250Hz，含正常与隐蔽 GPS 诱骗飞行），完成多源传感器一致性特征设计、M0–M4 方法对比、
+250Hz，含正常与隐蔽 GPS 诱骗飞行），完成多源传感器一致性特征设计、M0–M4 + M2e 方法对比、
 因果流式在线检测服务（CLI + FastAPI）。
 
 当前严格按航班划分 train/val/test：模型只在 train 拟合，val 选择报警阈值，test 仅用于
-最终评测。修正后的最佳测试 AUROC 为 0.777；跨航线实验显示泛化仍有限，详见报告。
+最终评测。特征共 92 维：旧模型显式只消费 `f_`(66) + `c_`(5)，仅 M2e 额外消费
+增强特征 `e_`(21)。最佳测试 AUROC 为 0.787（M2e）；报警阈值在验证集误报率 ≤10% 的
+约束下选取，在线结论需 5 窗中 3 窗确认。跨航线实验显示泛化仍有限，详见报告。
 
 ## 项目结构
 
@@ -13,21 +15,22 @@
 ├── src/                     # 核心代码
 │   ├── config.py            # 全局配置（随机种子 42、窗参数、路径）
 │   ├── data_loader.py       # 飞行日志 → 规范化 20Hz DataFrame（自动列名推断）
-│   ├── features.py          # L1 原始统计 + L2 物理一致性 + L3 滑窗特征
+│   ├── features.py          # L1 原始统计(f_) + L2 物理一致性(c_) + 增强一致性(e_)
 │   ├── labels.py            # attack 区间标签 + 按航班划分 train/val/test
-│   ├── models.py            # M0 阈值规则、M1 随机森林（L1 特征）
-│   ├── models_m2.py         # M2 HistGradientBoosting（全特征）
+│   ├── models.py            # M0 阈值规则、M1/M1b 随机森林（仅旧特征）
+│   ├── models_m2.py         # M2 HistGradientBoosting（f_+c_）、M2e（f_+c_+e_）
 │   ├── models_m3.py         # M3 BiLSTM（原始时序，可 GPU）
 │   ├── models_m4.py         # M4 孤立森林（无监督，仅正常窗训练）
-│   ├── evaluate.py          # AUROC/AUPRC/F1/漏检/误报/检测延迟 + 图表
+│   ├── alarm.py             # 连续报警状态机（3-of-5 确认 + 迟滞退出，离线/在线共用）
+│   ├── evaluate.py          # 受误报约束的阈值选择 + 原始/确认两套指标 + 图表
 │   ├── stream.py            # 因果流式检测器（在线语义）
 │   ├── cli.py               # 命令行检测
 │   └── server.py            # FastAPI 在线服务
 ├── scripts/
 │   ├── download_data.py     # 数据下载（gdown + 断点续传重试）
 │   ├── make_dataset.py      # 原始日志 → 窗级特征 parquet + 划分
-│   ├── run_pipeline.py      # M0-M4 训练 + 评测 → metrics.csv + 图表
-│   ├── run_route_holdout.py # 留一航线测试 M1 跨航线泛化
+│   ├── run_pipeline.py      # M0-M4 + M2e 训练 + 评测 → metrics.csv + 图表
+│   ├── run_route_holdout.py # 留一航线测试 6 模型跨航线泛化（--models 可选）
 │   └── run_all.py           # 一键全流程（--tiny 冒烟）
 ├── tests/                   # pytest 测试（核心函数自检）
 ├── data/raw/                # 原始数据（gitignore，脚本下载）
@@ -56,7 +59,7 @@ python scripts/download_data.py
 ## 一键运行
 
 ```bash
-python scripts/run_all.py        # 全量：下载 → 特征 → 训练 M0-M4 → 评测 → 图表
+python scripts/run_all.py        # 全量：下载 → 特征 → 训练 → 评测 → 图表
 python scripts/run_all.py --tiny # 冒烟：仅前 3 个航班（~5 分钟，产物写入 *_tiny 目录）
 ```
 
@@ -72,9 +75,9 @@ python scripts/run_all.py --tiny # 冒烟：仅前 3 个航班（~5 分钟，产
 
 产物清单：
 
-- `outputs/models/{m0,m1,m1b,m2,m3,m4}.joblib`
-- `outputs/metrics.csv`（各模型 AUROC/AUPRC/F1/漏检率/误报率/检测延迟）
-- `outputs/metrics_route_holdout.csv`（M1 跨航线泛化结果）
+- `outputs/models/{m0,m1,m1b,m2,m2e,m3,m4}.joblib`
+- `outputs/metrics.csv`（各模型 AUROC/AUPRC/F1/漏检率/误报率/检测延迟，原始与确认后两套）
+- `outputs/metrics_route_holdout.csv`（6 模型 × 3 航线的跨航线泛化结果）
 - `outputs/figs/`（roc_pr.png、feature_importance_*.png、timeline_*.png）
 - `data_processed/features_windowed.parquet`（可复现的全量特征）
 
@@ -85,10 +88,16 @@ python scripts/run_all.py --tiny # 冒烟：仅前 3 个航班（~5 分钟，产
 
 ```bash
 python scripts/make_dataset.py                 # 特征 + 标签 + 划分
-python scripts/run_pipeline.py                 # 训练 M0-M4 + 测评
-python scripts/run_pipeline.py --skip-m3       # 无 torch 时跳过 M3
-python scripts/run_route_holdout.py             # M1 分别留出直线/曲线/随机航线测试
+python scripts/run_pipeline.py                 # 训练 M0-M4 + M2e + 测评
+python scripts/run_pipeline.py --models m1,m2,m2e,m4 --skip-m3   # 只重跑部分模型
+python scripts/run_route_holdout.py             # 6 模型分别留出直线/曲线/随机航线
+python scripts/run_route_holdout.py --models m2 m2e              # 也可只跑指定模型
 ```
+
+**阈值协议**：正式阈值在验证集上选取，要求验证正常窗误报率 ≤10%，再在其中最大化召回
+（`threshold_policy=val_far<=0.10_max_recall`）；同时保留验证集 F1 最优阈值
+（`f1_threshold`）作为对照。`val_false_alarm_rate` 一并写入指标表，便于检查验证/测试差距。
+注意该约束只作用于验证集，不保证测试误报率同样低。
 
 ## 在线检测
 
@@ -107,15 +116,22 @@ python -m src.cli predict --input data/raw/PX4_Simulation_Data/Merged/Curved/Att
 {
   "flight": "log_21_04_2023_07_21_03.csv",
   "spoofing": true,
-  "threshold": 0.25,
+  "threshold": 0.7,
   "confidence": 0.965,
-  "alarm_intervals": [[2938.6, 3163.1]],
+  "alarm_intervals": [[2940.088, 3163.088]],
+  "raw_alert_windows": 445,
+  "confirmed_alert_windows": 443,
   "n_windows": 456,
-  "runtime_s": 22.7
+  "runtime_s": 6.714
 }
 ```
 
-该输出证明在线因果链路可以运行，不代表已达到部署准确度；独立测试仍有较高误报率。
+`spoofing` 与 `alarm_intervals` 基于**连续确认**状态（5 窗中 3 窗越阈值才确认，需连续
+3 窗低于 `0.8×阈值` 才清除），单个异常窗不会直接把整段飞行判为攻击；`raw_alert_windows`
+保留单窗越阈值的计数以便对照。`confidence` 是**未标定的模型最大原始分数**，不是概率。
+
+该输出证明在线因果链路可以运行，不代表已达到部署准确度；独立测试仍有较高误报率，
+且迟滞确认在正常航班上会延长报警区间（见报告 5.4）。
 
 **API 服务：**
 
@@ -138,7 +154,7 @@ docker run --rm -p 8000:8000 -v "${PWD}/outputs/models:/app/outputs/models:ro" u
 ## 测试
 
 ```bash
-python -m pytest tests/            # 28 个用例，覆盖加载器/特征/标签/模型/评测/流式/API
+python -m pytest tests/            # 57 个用例，覆盖加载器/特征/标签/模型/评测/报警状态机/流式/API/跨航线
 ```
 
 所有实验固定随机种子（`src/config.py: SEED = 42`），按航班划分训练/验证/测试（`configs/split.json`）；
@@ -149,6 +165,8 @@ python -m pytest tests/            # 28 个用例，覆盖加载器/特征/标�
 
 - 本项目使用 Claude Code（Claude Agent SDK）与 OpenAI Codex 辅助方案设计、代码编写、调试与报告草拟；
   每一步均由作业者复核并本地验证运行，所有实验数字取自本地运行输出，无编造。
+- 参考文献 PDF 保存在本地 `papers/`（已被 `.gitignore` 忽略，不随仓库分发），
+  报告中仅以 DOI 页面引用；其中的物理阈值与特征数值未被移植到本项目。
 - 使用的开源库：pandas、numpy、scikit-learn、matplotlib/seaborn、fastapi/uvicorn、pyarrow、
   pytest、torch（完整列表见 `requirements.txt`）。
 - 数据集：UAV-GPS-Spoofing-Dataset（开源，见 docs/dataset-notes.md）；
