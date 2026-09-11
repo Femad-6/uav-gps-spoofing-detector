@@ -12,8 +12,7 @@
 - DOI：[10.3390/rs14194925](https://doi.org/10.3390/rs14194925)
 - 许可：© 2022 by the authors, Licensee MDPI, Basel, Switzerland.
   本文以 [Creative Commons Attribution (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/) 许可发布。
-- 文件：`2022_Zhou_PerDet_ML_UAV_GPS_Spoofing_Perception_Data.pdf`
-  （文件名沿用早期下载时的称呼，实际第一作者为 Wei；引用请以上方信息为准）
+- 文件：`2022_Wei_PerDet_ML_UAV_GPS_Spoofing_Perception_Data.pdf`
 
 ### 2. Evaluation and telemetry-based detection of GPS spoofing effects on UAV navigation using software-defined radio
 
