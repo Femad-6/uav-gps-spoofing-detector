@@ -165,8 +165,9 @@ python -m pytest tests/            # 57 个用例，覆盖加载器/特征/标�
 
 - 本项目使用 Claude Code（Claude Agent SDK）与 OpenAI Codex 辅助方案设计、代码编写、调试与报告草拟；
   每一步均由作业者复核并本地验证运行，所有实验数字取自本地运行输出，无编造。
-- 参考文献 PDF 保存在本地 `papers/`（已被 `.gitignore` 忽略，不随仓库分发），
-  报告中仅以 DOI 页面引用；其中的物理阈值与特征数值未被移植到本项目。
+- 参考文献见 `papers/`：其中 PERDET（MDPI, CC BY）与 Hakani 等（Scientific Reports, CC BY）
+  两篇为开放获取，随仓库分发；Finn 等（IEEE）与 Feng 等（ACM）两篇受版权限制，仅本地保存、
+  以 DOI 链接引用。许可与引用信息见 `papers/README.md`；论文中的物理阈值与特征数值未被移植到本项目。
 - 使用的开源库：pandas、numpy、scikit-learn、matplotlib/seaborn、fastapi/uvicorn、pyarrow、
   pytest、torch（完整列表见 `requirements.txt`）。
 - 数据集：UAV-GPS-Spoofing-Dataset（开源，见 docs/dataset-notes.md）；

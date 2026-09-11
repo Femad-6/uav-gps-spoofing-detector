@@ -355,10 +355,12 @@ uvicorn src.server:app --port 8000                     # FastAPI: /healthz /pred
     该文
      仅作为数据集、传感器选择和实验设计的参考；本项目检测代码、划分和结果均为自主实现与本地运行；
   - PX4 SITL / Gazebo 官方文档（理解日志字段语义）。
-- **本地论文检索范围**：本轮优化另参考了 `papers/` 下本地保存的四篇 PDF（同源数据集论文、
-  PerDet、Feng 等的机载运动传感器检测、Hakani 等的 SDR 真实飞行实验）。这些 PDF 因出版方
-  版权限制**不随仓库分发**（`.gitignore` 已忽略），报告中仅以 DOI 页面引用；
-  其中的物理阈值与特征数值未被直接移植，只用于确定"哪些传感器一致性值得建模"。
+- **参考文献**：本轮优化另参考了四篇论文——同源数据集论文（Finn 等）、PerDet（Wei 等）、
+  Feng 等的机载运动传感器检测、Hakani 等的 SDR 真实飞行实验。其中 **PERDET（Remote Sensing,
+  CC BY）与 Hakani 等（Scientific Reports, CC BY）两篇为开放获取，随仓库分发于 `papers/`**；
+  **Finn 等（IEEE）与 Feng 等（ACM）两篇受版权限制，仅本地保存**（`.gitignore` 排除），
+  报告中以 DOI 链接引用。目录与许可说明见 `papers/README.md`。其中的物理阈值与特征数值
+  未被直接移植，只用于确定"哪些传感器一致性值得建模"。
 - **未使用**：本任务数据集中原作者论文实现或任何第三方检测器代码；结果对比表仅含自主实现。
 
 ## 附录：复现命令

@@ -12,5 +12,7 @@ submit.tar.gz
 2026推免短期综合任务.md
 docs/demo-script.md
 
-# 本地阅读的第三方论文；公开报告使用 DOI 链接
-papers/
+# 第三方论文：仅 CC BY 开放获取的 2 篇随仓库分发（见 papers/README.md），
+# 其余受 IEEE/ACM 版权限制的副本仅本地阅读，报告中以 DOI 链接引用。
+papers/2018_Feng_Efficient_Drone_Hijacking_Detection_Onboard_Motion_Sensors.pdf
+papers/2024_Finn_Detecting_Stealthy_GPS_Spoofing_UAV_Onboard_Sensors.pdf
